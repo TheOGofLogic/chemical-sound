@@ -1,0 +1,210 @@
+{
+  "spec_version": "CS-SPEC-P1-v1.2",
+  "waveform_version": "WF-P1-v1.2.0",
+  "governance_note": "Waveform parameters are pilot starting values subject to Milestone 4 bench validation.",
+  "signals": {
+    "SIG_ESS_v1": {
+      "filename": "SIG_ESS_v1.wav",
+      "sha256": "1b4876102704a732654f817c7cb3ddf49f55f53dba3b59dd5403334f4cc362c9",
+      "waveform_version": "WF-P1-v1.2.0",
+      "pre_roll_samples": 7200,
+      "active_samples": 9600,
+      "post_roll_samples": 7200,
+      "inverse_filter_filename": "SIG_ESS_v1_inverse.wav",
+      "inverse_filter_sha256": "4ff2ebe843b7c83f6d64f1e870c204d1537e1380fe6d4f7a30e224da0d0385d8",
+      "deconvolution_alignment_convention": {
+        "operation": "full_linear_convolution(aligned_recording, inverse_filter)",
+        "zero_delay_peak_index": 16799,
+        "formula": "pre_roll_samples + active_samples - 1 + residual_delay_samples"
+      },
+      "summary": {
+        "sample_rate_hz": 48000,
+        "num_samples": 24000,
+        "duration_sec": 0.5,
+        "peak_dbfs": -6.0,
+        "rms_dbfs": -13.2705,
+        "octave_band_power_db": {
+          "250Hz": -33.298,
+          "500Hz": -3.567,
+          "1000Hz": -4.782,
+          "2000Hz": -7.793,
+          "4000Hz": -10.803,
+          "8000Hz": -13.814,
+          "14000Hz": -20.941
+        }
+      },
+      "config": {
+        "signal_id": "SIG_ESS_v1",
+        "waveform_version": "WF-P1-v1.2.0",
+        "governance_status": "PROPOSED_START",
+        "sample_rate_hz": 48000,
+        "f1_hz": 400.0,
+        "f2_hz": 14000.0,
+        "sweep_duration_s": 0.2,
+        "fade_in_s": 0.01,
+        "fade_out_s": 0.01,
+        "pre_roll_s": 0.15,
+        "post_roll_s": 0.15,
+        "peak_dbfs": -6.0
+      }
+    },
+    "SIG_STEP_v1": {
+      "filename": "SIG_STEP_v1.wav",
+      "sha256": "25587f14c589d7d9b7324bbf89a2b252d17c57083affcee459ec96e33ab0f5c8",
+      "waveform_version": "WF-P1-v1.2.0",
+      "pre_roll_samples": 7200,
+      "post_roll_samples": 7200,
+      "summary": {
+        "sample_rate_hz": 48000,
+        "num_samples": 62400,
+        "duration_sec": 1.3,
+        "peak_dbfs": -6.0,
+        "rms_dbfs": -12.8476,
+        "octave_band_power_db": {
+          "250Hz": -34.801,
+          "500Hz": -1.58,
+          "1000Hz": -4.473,
+          "2000Hz": -7.54,
+          "4000Hz": -10.551,
+          "8000Hz": -13.561,
+          "14000Hz": -113.082
+        }
+      },
+      "config": {
+        "signal_id": "SIG_STEP_v1",
+        "waveform_version": "WF-P1-v1.2.0",
+        "governance_status": "PROPOSED_START",
+        "sample_rate_hz": 48000,
+        "f_min_hz": 500.0,
+        "f_max_hz": 8000.0,
+        "num_tones": 10,
+        "tone_duration_s": 0.06,
+        "ramp_duration_s": 0.005,
+        "decay_gap_s": 0.04,
+        "pre_roll_s": 0.15,
+        "post_roll_s": 0.15,
+        "peak_dbfs": -6.0
+      },
+      "windows": [
+        {
+          "step_index": 0,
+          "frequency_hz": 500.0,
+          "tone_start_sample": 7200,
+          "steady_start_sample": 7440,
+          "tone_end_sample": 9840,
+          "decay_start_sample": 10080,
+          "decay_end_sample": 12000
+        },
+        {
+          "step_index": 1,
+          "frequency_hz": 680.395,
+          "tone_start_sample": 12000,
+          "steady_start_sample": 12240,
+          "tone_end_sample": 14640,
+          "decay_start_sample": 14880,
+          "decay_end_sample": 16800
+        },
+        {
+          "step_index": 2,
+          "frequency_hz": 925.8747,
+          "tone_start_sample": 16800,
+          "steady_start_sample": 17040,
+          "tone_end_sample": 19440,
+          "decay_start_sample": 19680,
+          "decay_end_sample": 21600
+        },
+        {
+          "step_index": 3,
+          "frequency_hz": 1259.921,
+          "tone_start_sample": 21600,
+          "steady_start_sample": 21840,
+          "tone_end_sample": 24240,
+          "decay_start_sample": 24480,
+          "decay_end_sample": 26400
+        },
+        {
+          "step_index": 4,
+          "frequency_hz": 1714.488,
+          "tone_start_sample": 26400,
+          "steady_start_sample": 26640,
+          "tone_end_sample": 29040,
+          "decay_start_sample": 29280,
+          "decay_end_sample": 31200
+        },
+        {
+          "step_index": 5,
+          "frequency_hz": 2333.0581,
+          "tone_start_sample": 31200,
+          "steady_start_sample": 31440,
+          "tone_end_sample": 33840,
+          "decay_start_sample": 34080,
+          "decay_end_sample": 36000
+        },
+        {
+          "step_index": 6,
+          "frequency_hz": 3174.8021,
+          "tone_start_sample": 36000,
+          "steady_start_sample": 36240,
+          "tone_end_sample": 38640,
+          "decay_start_sample": 38880,
+          "decay_end_sample": 40800
+        },
+        {
+          "step_index": 7,
+          "frequency_hz": 4320.239,
+          "tone_start_sample": 40800,
+          "steady_start_sample": 41040,
+          "tone_end_sample": 43440,
+          "decay_start_sample": 43680,
+          "decay_end_sample": 45600
+        },
+        {
+          "step_index": 8,
+          "frequency_hz": 5878.938,
+          "tone_start_sample": 45600,
+          "steady_start_sample": 45840,
+          "tone_end_sample": 48240,
+          "decay_start_sample": 48480,
+          "decay_end_sample": 50400
+        },
+        {
+          "step_index": 9,
+          "frequency_hz": 8000.0,
+          "tone_start_sample": 50400,
+          "steady_start_sample": 50640,
+          "tone_end_sample": 53040,
+          "decay_start_sample": 53280,
+          "decay_end_sample": 55200
+        }
+      ]
+    },
+    "SIG_SIL_v1": {
+      "filename": "SIG_SIL_v1.wav",
+      "sha256": "df8caf0fe53942a3b1b930d9fd9353cf09d775220c3a79ed8f4e40aaa52d0348",
+      "waveform_version": "WF-P1-v1.2.0",
+      "summary": {
+        "sample_rate_hz": 48000,
+        "num_samples": 24000,
+        "duration_sec": 0.5,
+        "peak_dbfs": -120.0,
+        "rms_dbfs": -120.0,
+        "octave_band_power_db": {
+          "250Hz": -150.0,
+          "500Hz": -150.0,
+          "1000Hz": -150.0,
+          "2000Hz": -150.0,
+          "4000Hz": -150.0,
+          "8000Hz": -150.0,
+          "14000Hz": -150.0
+        }
+      },
+      "config": {
+        "signal_id": "SIG_SIL_v1",
+        "waveform_version": "WF-P1-v1.2.0",
+        "governance_status": "PROPOSED_START",
+        "sample_rate_hz": 48000,
+        "duration_s": 0.5
+      }
+    }
+  }
+}

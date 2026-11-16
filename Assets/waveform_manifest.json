@@ -1,0 +1,49 @@
+{
+  "manifest_version": "1.2.0",
+  "protocol_id": "CS-P1-v1.2",
+  "spec_version": "CS-SPEC-P1-v1.2",
+  "waveform_version": "WF-P1-v1.2.0",
+  "sample_rate_hz": 48000,
+  "assets": [
+    {
+      "asset_id": "SIG_ESS_v1",
+      "role": "excitation",
+      "filename": "SIG_ESS_v1.wav",
+      "sha256": "9767b1b06b3d1ca6595eb753d615812646b2c62e903956edd89c6a7441109da4",
+      "duration_ms": 200,
+      "num_frames": 9600,
+      "channels": 1,
+      "format": "PCM_FLOAT32"
+    },
+    {
+      "asset_id": "SIG_ESS_v1_inverse",
+      "role": "inverse_filter",
+      "filename": "SIG_ESS_v1_inverse.wav",
+      "sha256": "4ff2ebe843b7c83f6d64f1e870c204d1537e1380fe6d4f7a30e224da0d0385d8",
+      "duration_ms": 200,
+      "num_frames": 9600,
+      "channels": 1,
+      "format": "PCM_FLOAT32"
+    },
+    {
+      "asset_id": "SIG_STEP_v1",
+      "role": "excitation",
+      "filename": "SIG_STEP_v1.wav",
+      "sha256": "7573d9dc57eacadcd1614770010fd54ecd62facf4f6af6b76581b812ddf77ab1",
+      "duration_ms": 1000,
+      "num_frames": 48000,
+      "channels": 1,
+      "format": "PCM_FLOAT32"
+    },
+    {
+      "asset_id": "SIG_SIL_v1",
+      "role": "silence_control",
+      "filename": "SIG_SIL_v1.wav",
+      "sha256": "0bc970b0c7eb5aea6ac0ab4282515b2abc38f19a399980ebbab579dbf1d7a3dc",
+      "duration_ms": 200,
+      "num_frames": 9600,
+      "channels": 1,
+      "format": "PCM_FLOAT32"
+    }
+  ]
+}

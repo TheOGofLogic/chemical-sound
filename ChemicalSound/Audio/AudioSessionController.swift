@@ -1,0 +1,287 @@
+import AVFAudio
+import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
+
+public actor AudioSessionController {
+    private let routeValidator = AudioRouteValidator()
+    private let persistentDeviceCode: String
+
+    public init() {
+        let key = "chemical_sound.research_device_code"
+        if let existing = UserDefaults.standard.string(forKey: key) {
+            self.persistentDeviceCode = existing
+        } else {
+            let generated = "IOS_DEV_" + UUID().uuidString.prefix(8).uppercased()
+            UserDefaults.standard.set(generated, forKey: key)
+            self.persistentDeviceCode = generated
+        }
+    }
+
+    public func requestMicrophonePermission() async -> Bool {
+        #if os(iOS)
+        if #available(iOS 17.0, *) {
+            return await AVAudioApplication.requestRecordPermission()
+        } else {
+            return await withCheckedContinuation { continuation in
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+        #else
+        return true
+        #endif
+    }
+
+    public func configure(
+        protocol configuration: ResearchProtocol,
+        caseStatus: String = "NONE"
+    ) async throws -> AudioRuntimeProfile {
+        let granted = await requestMicrophonePermission()
+        guard granted else {
+            throw AcquisitionFailure.microphonePermissionDenied
+        }
+
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setActive(false)
+            let options: AVAudioSession.CategoryOptions = configuration.preferBottomSpeakerOverride
+                ? [.defaultToSpeaker]
+                : []
+            try session.setCategory(.playAndRecord, mode: .measurement, options: options)
+            try session.setPreferredSampleRate(configuration.requestedSampleRateHz)
+            try session.setPreferredInputNumberOfChannels(configuration.requestedInputChannels)
+        } catch {
+            throw AcquisitionFailure.audioEngineFailure("AVAudioSession request failed: \(error)")
+        }
+
+        guard session.availableModes.contains(.measurement) else {
+            throw AcquisitionFailure.unsupportedAudioRoute("AVAudioSession .measurement mode unavailable.")
+        }
+
+        guard let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else {
+            throw AcquisitionFailure.unsupportedAudioRoute("Built-in microphone unavailable.")
+        }
+
+        var requestedDataSourceName: String?
+        var requestedPolarPatternName: String?
+
+        do {
+            try session.setPreferredInput(builtInMic)
+            if let dataSources = builtInMic.dataSources,
+               let selected = preferredDataSource(from: dataSources) {
+                requestedDataSourceName = selected.dataSourceName
+                if selected.supportedPolarPatterns?.contains(.omnidirectional) == true {
+                    try selected.setPreferredPolarPattern(.omnidirectional)
+                    requestedPolarPatternName = AVAudioSession.PolarPattern.omnidirectional.rawValue
+                } else {
+                    try selected.setPreferredPolarPattern(nil)
+                }
+                try builtInMic.setPreferredDataSource(selected)
+            }
+            try session.setActive(true)
+            try? session.setPreferredOutputNumberOfChannels(1)
+        } catch {
+            throw AcquisitionFailure.audioEngineFailure("AVAudioSession activation failed: \(error)")
+        }
+
+        let profile = makeRuntimeProfile(
+            configuration,
+            caseStatus: caseStatus,
+            requestedDataSourceName: requestedDataSourceName,
+            requestedPolarPatternName: requestedPolarPatternName
+        )
+        try routeValidator.validateConfiguration(profile: profile, protocolConfiguration: configuration)
+        return profile
+        #else
+        let profile = makeSimulatedHostProfile(configuration, caseStatus: caseStatus)
+        try routeValidator.validateConfiguration(profile: profile, protocolConfiguration: configuration)
+        return profile
+        #endif
+    }
+
+    public func deactivate() throws {
+        #if os(iOS)
+        try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
+    }
+
+    public func currentOutputVolume() -> Float {
+        #if os(iOS)
+        return AVAudioSession.sharedInstance().outputVolume
+        #else
+        return 0.65
+        #endif
+    }
+
+    public func currentRuntimeProfile(
+        protocol configuration: ResearchProtocol,
+        caseStatus: String = "NONE"
+    ) -> AudioRuntimeProfile {
+        #if os(iOS)
+        return makeRuntimeProfile(
+            configuration,
+            caseStatus: caseStatus,
+            requestedDataSourceName: nil,
+            requestedPolarPatternName: nil
+        )
+        #else
+        return makeSimulatedHostProfile(configuration, caseStatus: caseStatus)
+        #endif
+    }
+
+    #if os(iOS)
+    private func preferredDataSource(
+        from sources: [AVAudioSessionDataSourceDescription]
+    ) -> AVAudioSessionDataSourceDescription? {
+        sources.first {
+            $0.dataSourceName.lowercased().contains("bottom") &&
+            ($0.supportedPolarPatterns?.contains(.omnidirectional) ?? true)
+        } ?? sources.first {
+            $0.supportedPolarPatterns?.contains(.omnidirectional) == true
+        } ?? sources.first
+    }
+
+    private func makeRuntimeProfile(
+        _ configuration: ResearchProtocol,
+        caseStatus: String,
+        requestedDataSourceName: String?,
+        requestedPolarPatternName: String?
+    ) -> AudioRuntimeProfile {
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+        let allInputs = session.availableInputs ?? []
+        let builtInMic = allInputs.first(where: { $0.portType == .builtInMic })
+        let micSources = builtInMic?.dataSources ?? []
+        let polars = session.inputDataSource?.supportedPolarPatterns?.map(\.rawValue) ?? []
+
+        let appVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.2"
+        let thermal = Self.describeThermalState(ProcessInfo.processInfo.thermalState)
+
+        var modelName = "iPhone"
+        var osVer = ProcessInfo.processInfo.operatingSystemVersionString
+        var battLevel: Float?
+        var chargeStr = "UNKNOWN"
+        var orientStr = "UNKNOWN"
+
+        #if canImport(UIKit)
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        modelName = UIDevice.current.name
+        osVer = UIDevice.current.systemVersion
+        let rawBatt = UIDevice.current.batteryLevel
+        battLevel = rawBatt >= 0 ? rawBatt : nil
+        switch UIDevice.current.batteryState {
+        case .unplugged: chargeStr = "UNPLUGGED"
+        case .charging: chargeStr = "CHARGING"
+        case .full: chargeStr = "FULL"
+        default: chargeStr = "UNKNOWN"
+        }
+        orientStr = String(describing: UIDevice.current.orientation.rawValue)
+        #endif
+
+        return AudioRuntimeProfile(
+            capturedAt: Date(),
+            commercialModelName: modelName,
+            hardwareModelIdentifier: Self.hardwareMachineIdentifier(),
+            iosVersion: osVer,
+            appVersion: appVer,
+            deviceCode: persistentDeviceCode,
+            caseStatus: caseStatus,
+            batteryLevel: battLevel,
+            chargingState: chargeStr,
+            thermalState: thermal,
+            deviceOrientation: orientStr,
+            requestedCategory: AVAudioSession.Category.playAndRecord.rawValue,
+            actualCategory: session.category.rawValue,
+            requestedMode: AVAudioSession.Mode.measurement.rawValue,
+            actualMode: session.mode.rawValue,
+            requestedSampleRate: configuration.requestedSampleRateHz,
+            actualSampleRate: session.sampleRate,
+            availableInputPorts: allInputs.map { "\($0.portType.rawValue):\($0.portName)" },
+            availableMicDataSources: micSources.map(\.dataSourceName),
+            availablePolarPatterns: polars,
+            inputPortTypes: route.inputs.map(\.portType.rawValue),
+            outputPortTypes: route.outputs.map(\.portType.rawValue),
+            inputPortNames: route.inputs.map(\.portName),
+            outputPortNames: route.outputs.map(\.portName),
+            requestedInputDataSource: requestedDataSourceName ?? session.inputDataSource?.dataSourceName,
+            selectedInputDataSource: session.inputDataSource?.dataSourceName,
+            requestedPolarPattern: requestedPolarPatternName,
+            selectedPolarPattern: session.inputDataSource?.selectedPolarPattern?.rawValue,
+            inputChannelCount: session.inputNumberOfChannels,
+            outputChannelCount: session.outputNumberOfChannels,
+            reportedSpeakerChannelMapping: route.outputs.map { "\($0.portType.rawValue)(\($0.channels?.count ?? 1)ch)" }.joined(separator: "+"),
+            inputLatencySeconds: session.inputLatency,
+            outputLatencySeconds: session.outputLatency,
+            ioBufferDurationSeconds: session.ioBufferDuration,
+            outputVolume: session.outputVolume
+        )
+    }
+    #endif
+
+    private func makeSimulatedHostProfile(
+        _ configuration: ResearchProtocol,
+        caseStatus: String
+    ) -> AudioRuntimeProfile {
+        AudioRuntimeProfile(
+            capturedAt: Date(),
+            commercialModelName: "macOS-Host-Simulator",
+            hardwareModelIdentifier: Self.hardwareMachineIdentifier(),
+            iosVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            appVersion: "0.1.2",
+            deviceCode: persistentDeviceCode,
+            caseStatus: caseStatus,
+            batteryLevel: nil,
+            chargingState: "UNPLUGGED",
+            thermalState: Self.describeThermalState(ProcessInfo.processInfo.thermalState),
+            deviceOrientation: "PORTRAIT",
+            requestedCategory: "AVAudioSessionCategoryPlayAndRecord",
+            actualCategory: "AVAudioSessionCategoryPlayAndRecord",
+            requestedMode: "AVAudioSessionModeMeasurement",
+            actualMode: "AVAudioSessionModeMeasurement",
+            requestedSampleRate: configuration.requestedSampleRateHz,
+            actualSampleRate: configuration.requestedSampleRateHz,
+            availableInputPorts: ["MicrophoneBuiltIn"],
+            availableMicDataSources: ["Bottom"],
+            availablePolarPatterns: ["Omnidirectional"],
+            inputPortTypes: ["MicrophoneBuiltIn"],
+            outputPortTypes: ["Speaker"],
+            inputPortNames: ["Built-In Microphone"],
+            outputPortNames: ["Built-In Speaker"],
+            requestedInputDataSource: "Bottom",
+            selectedInputDataSource: "Bottom",
+            requestedPolarPattern: "Omnidirectional",
+            selectedPolarPattern: "Omnidirectional",
+            inputChannelCount: 1,
+            outputChannelCount: 1,
+            reportedSpeakerChannelMapping: "Speaker(1ch)",
+            inputLatencySeconds: 0.005,
+            outputLatencySeconds: 0.005,
+            ioBufferDurationSeconds: 0.00533,
+            outputVolume: configuration.targetOutputVolume
+        )
+    }
+
+    private static func hardwareMachineIdentifier() -> String {
+        var sysinfo = utsname()
+        uname(&sysinfo)
+        return withUnsafePointer(to: &sysinfo.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+                String(validatingUTF8: $0) ?? "UnknownDevice"
+            }
+        }
+    }
+
+    private static func describeThermalState(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: return "NOMINAL"
+        case .fair: return "FAIR"
+        case .serious: return "SERIOUS"
+        case .critical: return "CRITICAL"
+        @unknown default: return "UNKNOWN"
+        }
+    }
+}
