@@ -47,7 +47,7 @@ workflows:
     publishing:
       app_store_connect:
         auth: integration
-        submit_to_testflight: true
+        submit_to_testflight: false
 
   chemical-sound-m3b-macos:
     name: Chemical Sound M3B — macOS XCTest & Unsigned iOS IPA

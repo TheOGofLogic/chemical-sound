@@ -99,6 +99,7 @@ public struct SampleSetupView: View {
                 }
             }
             .navigationTitle("Sample & Fixture")
+            .scrollDismissesKeyboard(.interactively)
         }
     }
 

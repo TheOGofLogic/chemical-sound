@@ -46,20 +46,37 @@ public actor AudioSessionController {
 
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
+
+        // Deactivate non-fatally if previously active
+        try? session.setActive(false)
+
+        // 1. Set .playAndRecord + .measurement (fall back cleanly if iOS rejects .defaultToSpeaker with .measurement -> OSStatus -50)
         do {
-            try session.setActive(false)
-            let options: AVAudioSession.CategoryOptions = configuration.preferBottomSpeakerOverride
-                ? [.defaultToSpeaker]
-                : []
-            try session.setCategory(.playAndRecord, mode: .measurement, options: options)
-            try session.setPreferredSampleRate(configuration.requestedSampleRateHz)
-            try session.setPreferredInputNumberOfChannels(configuration.requestedInputChannels)
+            if configuration.preferBottomSpeakerOverride {
+                do {
+                    try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
+                } catch {
+                    try session.setCategory(.playAndRecord, mode: .measurement, options: [])
+                }
+            } else {
+                try session.setCategory(.playAndRecord, mode: .measurement, options: [])
+            }
         } catch {
-            throw AcquisitionFailure.audioEngineFailure("AVAudioSession request failed: \(error)")
+            throw AcquisitionFailure.audioEngineFailure("AVAudioSession setCategory(.measurement) failed: \(error)")
         }
 
-        guard session.availableModes.contains(.measurement) else {
-            throw AcquisitionFailure.unsupportedAudioRoute("AVAudioSession .measurement mode unavailable.")
+        // 2. Request preferred sample rate prior to activation (negotiated preference)
+        try? session.setPreferredSampleRate(configuration.requestedSampleRateHz)
+
+        // 3. Activate session BEFORE querying/setting input ports, data sources, or channel counts (avoids OSStatus -50 on iPhone15,3)
+        do {
+            try session.setActive(true)
+        } catch {
+            throw AcquisitionFailure.audioEngineFailure("AVAudioSession setActive(true) failed: \(error)")
+        }
+
+        if configuration.preferBottomSpeakerOverride {
+            try? session.overrideOutputAudioPort(.speaker)
         }
 
         guard let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else {
@@ -69,23 +86,25 @@ public actor AudioSessionController {
         var requestedDataSourceName: String?
         var requestedPolarPatternName: String?
 
-        do {
-            try session.setPreferredInput(builtInMic)
-            if let dataSources = builtInMic.dataSources,
-               let selected = preferredDataSource(from: dataSources) {
-                requestedDataSourceName = selected.dataSourceName
-                if selected.supportedPolarPatterns?.contains(.omnidirectional) == true {
-                    try selected.setPreferredPolarPattern(.omnidirectional)
-                    requestedPolarPatternName = AVAudioSession.PolarPattern.omnidirectional.rawValue
-                } else {
-                    try selected.setPreferredPolarPattern(nil)
-                }
-                try builtInMic.setPreferredDataSource(selected)
+        // 4. Negotiate preferred built-in mic, data source, polar pattern, and mono channel counts post-activation
+        try? session.setPreferredInput(builtInMic)
+        if let dataSources = builtInMic.dataSources,
+           let selected = preferredDataSource(from: dataSources) {
+            requestedDataSourceName = selected.dataSourceName
+            if selected.supportedPolarPatterns?.contains(.omnidirectional) == true {
+                try? selected.setPreferredPolarPattern(.omnidirectional)
+                requestedPolarPatternName = AVAudioSession.PolarPattern.omnidirectional.rawValue
+            } else {
+                try? selected.setPreferredPolarPattern(nil)
             }
-            try session.setActive(true)
+            try? builtInMic.setPreferredDataSource(selected)
+        }
+
+        if session.maximumInputNumberOfChannels >= configuration.requestedInputChannels {
+            try? session.setPreferredInputNumberOfChannels(configuration.requestedInputChannels)
+        }
+        if session.maximumOutputNumberOfChannels >= 1 {
             try? session.setPreferredOutputNumberOfChannels(1)
-        } catch {
-            throw AcquisitionFailure.audioEngineFailure("AVAudioSession activation failed: \(error)")
         }
 
         let profile = await makeRuntimeProfile(

@@ -41,7 +41,7 @@ public actor AudioAcquisitionEngine {
         engine.connect(
             engine.mainMixerNode,
             to: engine.outputNode,
-            format: outputFormat
+            format: nil
         )
 
         try recorder.prepare(

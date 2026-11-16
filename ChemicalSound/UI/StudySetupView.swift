@@ -93,6 +93,7 @@ public struct StudySetupView: View {
                 }
             }
             .navigationTitle("Study & Audio Setup")
+            .scrollDismissesKeyboard(.interactively)
         }
     }
 }

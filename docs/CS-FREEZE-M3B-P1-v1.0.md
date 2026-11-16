@@ -106,6 +106,7 @@ shall be documented and versioned before the affected evidence is treated as con
 
 #### Post-Freeze Build Defect Log (Pre-Physical Run)
 - **`M3B-BF-01` (Swift 6 `@MainActor` Concurrency Compile Fix):** Replaced `inout` parameter across `async` boundary in `SampleSetupView.swift` / `AcquisitionCoordinator.acceptSampleAndRunSettling` with a value-returning `SampleMetadata` signature, and wrapped `UIDevice.current` telemetry reads inside `await MainActor.run` in `AudioSessionController.swift`. Zero impact on audio routing, timing, cooldown, QC thresholds, schema fields, DSP, or Gate 0B rules; Python `package_source_sha256` (`f4f936ab454281729951f4a18eb313ad24ae01df8723b18cd79bacef50853394`) and M3B/Gate 0B threshold digests remain unchanged.
+- **`M3B-BF-03` (Real-Device `iPhone15,3` `AVAudioSession` `OSStatus -50` Activation Ordering Fix, Build `3`):** Empirical testing on physical baseline `iPhone15,3` (`IOS_DEV_21F03054`, Build `2`) exposed `NSOSStatusErrorDomain Code=-50` (`paramErr`) when calling `setPreferredInputNumberOfChannels(1)` / `.defaultToSpeaker` prior to `AVAudioSession.setActive(true)` in `.measurement` mode. Reordered `AudioSessionController.configure` to activate `.playAndRecord` / `.measurement` first (falling back cleanly if `.defaultToSpeaker` is rejected pre-activation and applying `overrideOutputAudioPort(.speaker)` + preferred input/output channel preferences post-activation), while preserving strict post-activation verification in `AudioRouteValidator`.
 
 ---
 
