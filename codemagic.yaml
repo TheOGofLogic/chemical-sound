@@ -6,10 +6,8 @@ workflows:
     integrations:
       app_store_connect: ChemicalSoundASC
     environment:
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: org.chemicalsound.acquisition
       vars:
+        BUNDLE_ID: "org.chemicalsound.acquisition"
         XCODE_PROJECT: "ChemicalSound.xcodeproj"
         XCODE_SCHEME: "ChemicalSound"
     scripts:
@@ -18,13 +16,20 @@ workflows:
           set -euo pipefail
           swift test 2>&1 | tee swift_test_output.txt
 
-      - name: Generate Xcode project & apply Apple code-signing profiles
+      - name: Generate Xcode project, create Apple signing files & apply profiles
         script: |
           set -euo pipefail
           if ! command -v xcodegen >/dev/null 2>&1; then
             brew install xcodegen
           fi
           xcodegen generate
+          keychain initialize
+          openssl genrsa -out /tmp/dist_cert_key.pem 2048
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create \
+            --certificate-key=@file:/tmp/dist_cert_key.pem
+          keychain add-certificates
           xcode-project use-profiles
 
       - name: Build signed TestFlight IPA
@@ -79,7 +84,7 @@ workflows:
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_IDENTITY="" \
             AD_HOC_CODE_SIGNING_ALLOWED=NO \
             clean build
 
