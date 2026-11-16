@@ -144,13 +144,14 @@ public final class AcquisitionCoordinator: ObservableObject {
     }
 
     public func acceptSampleAndRunSettling(
-        metadata: inout SampleMetadata,
+        metadata: SampleMetadata,
         overrideSettleSeconds: Int? = nil
-    ) async throws {
+    ) async throws -> SampleMetadata {
+        var updatedMetadata = metadata
         guard calibration.hasPassedInitialCalibration else {
             throw AcquisitionFailure.calibrationUnavailable
         }
-        let missing = metadata.missingRequiredFields()
+        let missing = updatedMetadata.missingRequiredFields()
         guard missing.isEmpty else {
             throw AcquisitionFailure.metadataIncomplete(missing)
         }
@@ -159,12 +160,13 @@ public final class AcquisitionCoordinator: ObservableObject {
         try stateMachine.handle(.sampleMetadataAccepted)
         try stateMachine.handle(.settlingStarted)
 
-        let targetSec = overrideSettleSeconds ?? (metadata.isLiquidSample ? protocolConfiguration.settleDurationSeconds : 0)
+        let targetSec = overrideSettleSeconds ?? (updatedMetadata.isLiquidSample ? protocolConfiguration.settleDurationSeconds : 0)
         let actualElapsed = try await timing.runSettleCountdown(seconds: targetSec)
-        if metadata.sampleRestDurationSec == nil {
-            metadata.sampleRestDurationSec = max(Double(targetSec), actualElapsed)
+        if updatedMetadata.sampleRestDurationSec == nil {
+            updatedMetadata.sampleRestDurationSec = max(Double(targetSec), actualElapsed)
         }
         try stateMachine.handle(.settlingCompleted)
+        return updatedMetadata
     }
 
     public func acquireRepetition(metadata: SampleMetadata) async {

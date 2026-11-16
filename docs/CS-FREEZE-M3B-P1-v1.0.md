@@ -102,7 +102,10 @@ Any change affecting:
 
 shall be documented and versioned before the affected evidence is treated as controlled confirmatory evidence.
 
-Observed physical results shall not be used to retroactively modify the frozen acceptance rules and then reinterpret the same experiment as though the revised rules had been preregistered.
+- **Observed physical results** shall not be used to retroactively modify the frozen acceptance rules and then reinterpret the same experiment as though the revised rules had been preregistered.
+
+#### Post-Freeze Build Defect Log (Pre-Physical Run)
+- **`M3B-BF-01` (Swift 6 `@MainActor` Concurrency Compile Fix):** Replaced `inout` parameter across `async` boundary in `SampleSetupView.swift` / `AcquisitionCoordinator.acceptSampleAndRunSettling` with a value-returning `SampleMetadata` signature, and wrapped `UIDevice.current` telemetry reads inside `await MainActor.run` in `AudioSessionController.swift`. Zero impact on audio routing, timing, cooldown, QC thresholds, schema fields, DSP, or Gate 0B rules; Python `package_source_sha256` (`f4f936ab454281729951f4a18eb313ad24ae01df8723b18cd79bacef50853394`) and M3B/Gate 0B threshold digests remain unchanged.
 
 ---
 

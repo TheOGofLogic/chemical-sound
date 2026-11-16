@@ -83,9 +83,10 @@ public struct SampleSetupView: View {
                         Task {
                             do {
                                 validationMessage = nil
-                                let settleOverride = (appCoordinator.draftMetadata.scanStage == .gate0A) ? 0 : nil
-                                try await coordinator.acceptSampleAndRunSettling(
-                                    metadata: &appCoordinator.draftMetadata,
+                                let localMeta = appCoordinator.draftMetadata
+                                let settleOverride = (localMeta.scanStage == .gate0A) ? 0 : nil
+                                appCoordinator.draftMetadata = try await coordinator.acceptSampleAndRunSettling(
+                                    metadata: localMeta,
                                     overrideSettleSeconds: settleOverride
                                 )
                                 appCoordinator.selectedTab = .acquisition

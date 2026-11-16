@@ -88,7 +88,7 @@ public actor AudioSessionController {
             throw AcquisitionFailure.audioEngineFailure("AVAudioSession activation failed: \(error)")
         }
 
-        let profile = makeRuntimeProfile(
+        let profile = await makeRuntimeProfile(
             configuration,
             caseStatus: caseStatus,
             requestedDataSourceName: requestedDataSourceName,
@@ -120,9 +120,9 @@ public actor AudioSessionController {
     public func currentRuntimeProfile(
         protocol configuration: ResearchProtocol,
         caseStatus: String = "NONE"
-    ) -> AudioRuntimeProfile {
+    ) async -> AudioRuntimeProfile {
         #if os(iOS)
-        return makeRuntimeProfile(
+        return await makeRuntimeProfile(
             configuration,
             caseStatus: caseStatus,
             requestedDataSourceName: nil,
@@ -150,7 +150,7 @@ public actor AudioSessionController {
         caseStatus: String,
         requestedDataSourceName: String?,
         requestedPolarPatternName: String?
-    ) -> AudioRuntimeProfile {
+    ) async -> AudioRuntimeProfile {
         let session = AVAudioSession.sharedInstance()
         let route = session.currentRoute
         let allInputs = session.availableInputs ?? []
@@ -168,18 +168,27 @@ public actor AudioSessionController {
         var orientStr = "UNKNOWN"
 
         #if canImport(UIKit)
-        UIDevice.current.isBatteryMonitoringEnabled = true
-        modelName = UIDevice.current.name
-        osVer = UIDevice.current.systemVersion
-        let rawBatt = UIDevice.current.batteryLevel
-        battLevel = rawBatt >= 0 ? rawBatt : nil
-        switch UIDevice.current.batteryState {
-        case .unplugged: chargeStr = "UNPLUGGED"
-        case .charging: chargeStr = "CHARGING"
-        case .full: chargeStr = "FULL"
-        default: chargeStr = "UNKNOWN"
+        let uiSnapshot = await MainActor.run { () -> (String, String, Float?, String, String) in
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            let name = UIDevice.current.name
+            let ver = UIDevice.current.systemVersion
+            let rawBatt = UIDevice.current.batteryLevel
+            let batt: Float? = rawBatt >= 0 ? rawBatt : nil
+            let charge: String
+            switch UIDevice.current.batteryState {
+            case .unplugged: charge = "UNPLUGGED"
+            case .charging: charge = "CHARGING"
+            case .full: charge = "FULL"
+            default: charge = "UNKNOWN"
+            }
+            let orient = String(describing: UIDevice.current.orientation.rawValue)
+            return (name, ver, batt, charge, orient)
         }
-        orientStr = String(describing: UIDevice.current.orientation.rawValue)
+        modelName = uiSnapshot.0
+        osVer = uiSnapshot.1
+        battLevel = uiSnapshot.2
+        chargeStr = uiSnapshot.3
+        orientStr = uiSnapshot.4
         #endif
 
         return AudioRuntimeProfile(
