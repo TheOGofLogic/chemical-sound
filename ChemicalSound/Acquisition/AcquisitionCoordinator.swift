@@ -27,27 +27,27 @@ public final class AcquisitionCoordinator: ObservableObject {
 
     public init(
         stateMachine: AcquisitionStateMachine,
-        timing: TimingController = TimingController(),
-        repetitions: RepetitionManager = RepetitionManager(),
-        calibration: CalibrationManager = CalibrationManager(),
-        audioSession: AudioSessionController = AudioSessionController(),
-        audioEngine: AudioAcquisitionEngine = AudioAcquisitionEngine(),
-        waveformRepository: WaveformRepository = WaveformRepository(),
+        timing: TimingController? = nil,
+        repetitions: RepetitionManager? = nil,
+        calibration: CalibrationManager? = nil,
+        audioSession: AudioSessionController? = nil,
+        audioEngine: AudioAcquisitionEngine? = nil,
+        waveformRepository: WaveformRepository? = nil,
         qualityControl: QualityControlEngine = QualityControlEngine(),
-        store: AcquisitionStore = AcquisitionStore(),
+        store: AcquisitionStore? = nil,
         auditLogger: AuditLogger,
         exportManager: ExportManager = ExportManager(),
         protocolConfiguration: ResearchProtocol = .phase1v12
     ) {
         self.stateMachine = stateMachine
-        self.timing = timing
-        self.repetitions = repetitions
-        self.calibration = calibration
-        self.audioSession = audioSession
-        self.audioEngine = audioEngine
-        self.waveformRepository = waveformRepository
+        self.timing = timing ?? TimingController()
+        self.repetitions = repetitions ?? RepetitionManager()
+        self.calibration = calibration ?? CalibrationManager()
+        self.audioSession = audioSession ?? AudioSessionController()
+        self.audioEngine = audioEngine ?? AudioAcquisitionEngine()
+        self.waveformRepository = waveformRepository ?? WaveformRepository()
         self.qualityControl = qualityControl
-        self.store = store
+        self.store = store ?? AcquisitionStore()
         self.auditLogger = auditLogger
         self.exportManager = exportManager
         self.protocolConfiguration = protocolConfiguration
