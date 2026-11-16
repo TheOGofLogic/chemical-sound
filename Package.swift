@@ -17,7 +17,7 @@ let package = Package(
         .target(
             name: "ChemicalSound",
             path: "ChemicalSound",
-            exclude: ["Info.plist"]
+            exclude: ["Info.plist", "Assets.xcassets"]
         ),
         .testTarget(
             name: "ChemicalSoundTests",

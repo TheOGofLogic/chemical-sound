@@ -1,15 +1,53 @@
 workflows:
+  chemical-sound-testflight:
+    name: Chemical Sound M3B — Signed TestFlight Release
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    integrations:
+      app_store_connect: ChemicalSoundASC
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: org.chemicalsound.acquisition
+      vars:
+        XCODE_PROJECT: "ChemicalSound.xcodeproj"
+        XCODE_SCHEME: "ChemicalSound"
+    scripts:
+      - name: Run controlled Swift XCTest verification gate
+        script: |
+          set -euo pipefail
+          swift test 2>&1 | tee swift_test_output.txt
+
+      - name: Generate Xcode project & apply Apple code-signing profiles
+        script: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen generate
+          xcode-project use-profiles
+
+      - name: Build signed TestFlight IPA
+        script: |
+          set -euo pipefail
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - swift_test_output.txt
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+
   chemical-sound-m3b-macos:
     name: Chemical Sound M3B — macOS XCTest & Unsigned iOS IPA
     instance_type: mac_mini_m2
     max_build_duration: 30
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: main
-          include: true
-          source: true
     scripts:
       - name: Record macOS & Xcode toolchain versions
         script: |
@@ -26,7 +64,7 @@ workflows:
           cd ChemicalSound_M3B_Mac_Handoff_v1.0
           swift test 2>&1 | tee ../swift_test_output.txt
 
-      - name: Generate Xcode project & build unsigned iOS IPA for Windows Sideloading
+      - name: Generate Xcode project & build unsigned iOS IPA
         script: |
           set -euo pipefail
           if ! command -v xcodegen >/dev/null 2>&1; then
