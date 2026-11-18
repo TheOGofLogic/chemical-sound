@@ -1,4 +1,4 @@
-# CHEMICAL SOUND
+# LIQUID ANALYZER
 
 ## Milestone 3B Bare-Phone Bench Audio Characterization SOP
 
@@ -12,7 +12,7 @@
 
 ## 1. PURPOSE
 
-Milestone 3B shall determine whether the designated baseline iPhone and Minimal Swift Acquisition Prototype provide a sufficiently stable, reproducible native audio acquisition platform for subsequent Chemical Sound feasibility experiments.
+Milestone 3B shall determine whether the designated baseline iPhone and Minimal Swift Acquisition Prototype provide a sufficiently stable, reproducible native audio acquisition platform for subsequent Liquid Analyzer feasibility experiments.
 
 Milestone 3B does **not** establish:
 - liquid identity;

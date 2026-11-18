@@ -10,9 +10,7 @@ public actor AudioSessionController {
 
     public init() {
         let primaryKey = "liquid_analyzer.research_device_code"
-        let legacyKey = "chemical_sound.research_device_code"
-        if let existing = UserDefaults.standard.string(forKey: primaryKey) ?? UserDefaults.standard.string(forKey: legacyKey) {
-            UserDefaults.standard.set(existing, forKey: primaryKey)
+        if let existing = UserDefaults.standard.string(forKey: primaryKey) {
             self.persistentDeviceCode = existing
         } else {
             let generated = "IOS_DEV_" + UUID().uuidString.prefix(8).uppercased()

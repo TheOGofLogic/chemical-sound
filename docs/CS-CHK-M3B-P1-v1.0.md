@@ -1,4 +1,4 @@
-# CHEMICAL SOUND
+# LIQUID ANALYZER
 
 ## Milestone 3B Physical-Run Checklist
 
@@ -17,7 +17,7 @@
 - **iPhone commercial model:** `______________________________`
 - **Hardware identifier:** `______________________________`
 - **iOS version:** `______________________________`
-- **Chemical Sound build:** `______________________________`
+- **Liquid Analyzer build:** `______________________________`
 - **Software build identity / commit:** `______________________________`
 - **Battery start:** `__________ %`
 - **Battery end:** `__________ %`

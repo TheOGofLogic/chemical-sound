@@ -1,4 +1,4 @@
-# Chemical Sound — Milestone 4 Measurement Feasibility Report (Gate 0A & Gate 0B)
+# Liquid Analyzer — Milestone 4 Measurement Feasibility Report (Gate 0A & Gate 0B)
 
 **Report ID:** `CS-MFR-P1-v1.2-001`  
 **Governing Specification:** `CS-SPEC-P1-v1.2`  

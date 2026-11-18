@@ -1,4 +1,4 @@
-# Chemical Sound — Mac / Xcode Milestone 3B Handoff Guide
+# Liquid Analyzer — Mac / Xcode Milestone 3B Handoff Guide
 
 - **Archive Purpose:** Transfer frozen Milestone 3A/3B Swift iOS acquisition code, verified `48 kHz` Float32 waveform assets, unit tests, and controlled M3B bench SOPs to macOS for real-device `CSRD_P1_SESS_001` execution.
 - **Governing Freeze Checkpoint:** `CS-FREEZE-M3B-P1-v1.0` (`chemical-sound==0.1.2` / `src-f4f936ab4542`)
@@ -7,7 +7,7 @@
 
 ## 1. Verify Archive Integrity & Run `swift test` on macOS
 
-Unzip `ChemicalSound_M3B_Mac_Handoff_v1.0.zip` on your Mac, open Terminal in the unzipped folder, and run:
+Unzip `LiquidAnalyzer_M3B_Mac_Handoff_v1.0.zip` on your Mac, open Terminal in the unzipped folder, and run:
 
 ```bash
 swift test
@@ -19,12 +19,12 @@ Confirm all five XCTest suites (`StateMachineTests`, `ManifestVerificationTests`
 
 ## 2. Build & Install on Your Designated Baseline iPhone in Xcode
 
-1. Open **Xcode** → **File > New > Project…** → **iOS > App** (`Product Name: ChemicalSound`, `Interface: SwiftUI`, `Language: Swift`).
-2. Delete Xcode's auto-generated `ContentView.swift` and `ChemicalSoundApp.swift` (our `ChemicalSound/App/ChemicalSoundApp.swift` already provides `@main`).
-3. Drag the **`ChemicalSound`** folder (excluding `Info.plist`) and the **`Assets`** folder (`SIG_ESS_v1.wav`, `SIG_ESS_v1_inverse.wav`, `SIG_STEP_v1.wav`, `SIG_SIL_v1.wav`, `waveform_manifest.json`) into the `ChemicalSound` app target (**Copy items if needed** checked; either folder reference or group works—`WaveformRepository` supports both).
+1. Open **Xcode** → **File > New > Project…** → **iOS > App** (`Product Name: LiquidAnalyzer`, `Interface: SwiftUI`, `Language: Swift`).
+2. Delete Xcode's auto-generated `ContentView.swift` and `LiquidAnalyzerApp.swift` (our `LiquidAnalyzer/App/LiquidAnalyzerApp.swift` already provides `@main`).
+3. Drag the **`LiquidAnalyzer`** folder (excluding `Info.plist`) and the **`Assets`** folder (`SIG_ESS_v1.wav`, `SIG_ESS_v1_inverse.wav`, `SIG_STEP_v1.wav`, `SIG_SIL_v1.wav`, `waveform_manifest.json`) into the `LiquidAnalyzer` app target (**Copy items if needed** checked; either folder reference or group works—`WaveformRepository` supports both).
 4. In the Target **Info** tab, add Privacy key:
    - `NSMicrophoneUsageDescription` (`Privacy - Microphone Usage Description`):
-     `"Chemical Sound requires microphone access to record acoustic impulse responses for controlled research feasibility testing."`
+     `"Liquid Analyzer requires microphone access to record acoustic impulse responses for controlled research feasibility testing."`
 5. In **Signing & Capabilities**, select your Apple Developer / Personal Team, connect your designated baseline iPhone, and click **Run (`⌘R`)**.
 6. Once installed on the iPhone, **unplug the USB/charging cable**, **remove the phone case**, and confirm **no Bluetooth/wired audio accessories** are connected (`CS-OPS-M3B-P1-v1.0` Preconditions).
 
@@ -56,7 +56,7 @@ Follow `Docs/CS-EXEC-M3B-P1-v1.0.md`:
 Once `CSRD_P1_SESS_001` is copied back to Windows, run:
 
 ```powershell
-C:\Users\acath\.gemini\antigravity\scratch\chemical-sound\.venv\Scripts\python.exe -m chemical_sound.cli m3b run-all --bundle-dir path\to\CSRD_P1_SESS_001 --output-dir C:\Users\acath\.gemini\antigravity\scratch\chemical-sound\reports\CSRD_P1_SESS_001
+C:\Users\acath\.gemini\antigravity\scratch\chemical-sound\.venv\Scripts\python.exe -m liquid_analyzer.cli m3b run-all --bundle-dir path\to\CSRD_P1_SESS_001 --output-dir C:\Users\acath\.gemini\antigravity\scratch\chemical-sound\reports\CSRD_P1_SESS_001
 ```
 
 Attach the four generated files from `reports\CSRD_P1_SESS_001\` for formal M3B disposition review:

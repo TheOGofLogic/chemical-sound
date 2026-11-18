@@ -1,4 +1,4 @@
-# CHEMICAL SOUND
+# LIQUID ANALYZER
 
 ## M3B Real-Device Bundle Acceptance Criteria
 
@@ -207,10 +207,10 @@ Do not proceed to Milestone 3C until the blocking defect is corrected.
 ## F. WHAT M3B PASS MEANS
 
 **M3B PASS means:**
-The designated iPhone and Chemical Sound acquisition software have demonstrated sufficient operational integrity to begin controlled fixture characterization.
+The designated iPhone and Liquid Analyzer acquisition software have demonstrated sufficient operational integrity to begin controlled fixture characterization.
 
 **M3B PASS does not mean:**
-- Chemical Sound distinguishes liquids;
+- Liquid Analyzer distinguishes liquids;
 - Water and Oil are acoustically separable;
 - concentration can be estimated;
 - an unknown liquid can be identified;

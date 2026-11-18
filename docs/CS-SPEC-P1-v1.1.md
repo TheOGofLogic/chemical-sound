@@ -1,4 +1,4 @@
-# CHEMICAL SOUND
+# LIQUID ANALYZER
 
 ## Phase 1 v1.1 Master Specification
 
@@ -14,7 +14,7 @@
 
 # 1. Purpose
 
-Chemical Sound is an experimental iPhone-based system designed to determine whether controlled liquid samples can be distinguished through repeatable acoustic-response measurements.
+Liquid Analyzer is an experimental iPhone-based system designed to determine whether controlled liquid samples can be distinguished through repeatable acoustic-response measurements.
 
 The system shall emit a standardized acoustic excitation, record the resulting container-liquid response, extract a compact acoustic fingerprint, and compare that fingerprint with a calibrated reference dataset.
 
@@ -27,7 +27,7 @@ Phase 1 shall evaluate:
 5. Rejection of samples that do not reliably match a known reference.
 6. Transferability across sessions, batches, containers, and eventually devices.
 
-Chemical Sound Phase 1 shall not claim to determine:
+Liquid Analyzer Phase 1 shall not claim to determine:
 
 - Complete molecular composition.
 - Chemical purity.
@@ -43,7 +43,7 @@ Chemical Sound Phase 1 shall not claim to determine:
 
 # 2. Governing scientific statement
 
-Chemical Sound is a controlled acoustic-response measurement system.
+Liquid Analyzer is a controlled acoustic-response measurement system.
 
 It measures the combined mechanical and acoustic behavior of:
 
@@ -102,6 +102,6 @@ Phase 1D shall determine whether a model developed on the baseline iPhone transf
 See full Section 5–22 requirements governed by Version 1.1:
 - **Sections 5–10**: Baseline iPhone, PP container screening, Mode B fixture + Controls K1/K2, requested vs. verified `AVAudioSession` configuration, `400 Hz–14 kHz` pilot ESS + matched inverse filter + stepped tones + silence control, `0.65 ± 0.01` provisional hardware volume & `2.0 s` thermal cooldown, gravimetric `% w/w` prep & 30-min mix / 3-min post-pour settle controls.
 - **Sections 11–18**: Four-level CSRD-P1 hierarchy, 4-batch LOBO-CV + 2-batch locked test, Section 13 metadata fields, Section 14 QC states (`PASS`, `REJECTED`, `INTERRUPTED`, `INCOMPLETE`), session calibration drift checks, compact feature vector ($d \le 25$), Mahalanobis distance + nearest-class margin unknown rejection, and nuisance-only leakage diagnostic classifier.
-- **Section 19**: Authoritative Python DSP Reference Pipeline (`chemical_sound` package).
+- **Section 19**: Authoritative Python DSP Reference Pipeline (`liquid_analyzer` package).
 - **Section 20**: Minimal Swift Acquisition Architecture (22-state acquisition state machine, 8 architectural layers, lossless bundle export).
 - **Section 21**: Milestones 1 through 7.

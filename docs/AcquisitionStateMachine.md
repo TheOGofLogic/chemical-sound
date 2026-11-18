@@ -1,6 +1,6 @@
-# Chemical Sound — Reconciled 22-State Acquisition Machine (`CS-SPEC-P1-v1.2`)
+# Liquid Analyzer — Reconciled 22-State Acquisition Machine (`CS-SPEC-P1-v1.2`)
 
-This document specifies the deterministic acquisition state machine implemented in `ChemicalSound/StateMachine/` for Milestone 3A.
+This document specifies the deterministic acquisition state machine implemented in `LiquidAnalyzer/StateMachine/` for Milestone 3A.
 
 ---
 

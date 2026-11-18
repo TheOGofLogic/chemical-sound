@@ -1,6 +1,6 @@
 # LIQUID ANALYZER: Phase 1 v1.2 Master Specification
 
-**Document ID:** `CS-SPEC-P1-v1.2` *(retained document identifier; application renamed from Chemical Sound to Liquid Analyzer)*  
+**Document ID:** `CS-SPEC-P1-v1.2` *(retained document identifier; application renamed from Liquid Analyzer to Liquid Analyzer)*  
 **Supersedes:** `CS-SPEC-P1-v1.1`  
 **Document status:** Controlled development specification (Candidate for Freeze)  
 **System classification:** Experimental acoustic liquid-response measurement & reference-matching instrument  

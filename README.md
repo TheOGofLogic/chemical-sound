@@ -15,7 +15,7 @@ Controlled implementation of **Liquid Analyzer Phase 1 v1.2 (`CS-SPEC-P1-v1.2`)*
 ## Repository Structure
 
 ```text
-chemical-sound/
+liquid-analyzer/
 ├── docs/
 │   ├── CS-SPEC-P1-v1.2.md               # Frozen Phase 1 v1.2 Master Specification
 │   ├── CS-SOP-M3B-P1-v1.1.md            # Controlled Milestone 3B Bench SOP & Gate 0B Thresholds (v1.1)

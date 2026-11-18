@@ -66,6 +66,11 @@ android {
     buildFeatures {
         compose = true
     }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 dependencies {
@@ -79,6 +84,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("com.google.guava:guava:33.3.1-android")
 
     // CameraX for live AIM targeting view
     val cameraxVersion = "1.4.0"

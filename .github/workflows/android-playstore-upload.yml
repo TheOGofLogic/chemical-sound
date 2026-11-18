@@ -1,6 +1,13 @@
 name: Build Signed Android AAB & Upload to Google Play (Liquid Analyzer)
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "android/**"
+      - "Assets/**"
+      - ".github/workflows/android-playstore-upload.yml"
   workflow_dispatch:
     inputs:
       version_code:

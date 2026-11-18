@@ -1,4 +1,4 @@
-# CHEMICAL SOUND
+# LIQUID ANALYZER
 
 ## Milestone 3B Bare-Phone Bench Audio Characterization SOP
 
@@ -13,7 +13,7 @@
 | **Hardware Domain** | `IPHONE_NATIVE` |
 | **Classification** | `CONTROLLED ENGINEERING DOCUMENT` |
 | **Effective Date** | Upon approval |
-| **Owner** | Gerald Clerge / Chemical Sound Project |
+| **Owner** | Gerald Clerge / Liquid Analyzer Project |
 
 > **CONTROL STATUS:** The controlled PDF is the presentation copy; this archived Markdown source remains the editable source record in the repository. Printed copies are uncontrolled unless signed and dated.
 
@@ -70,7 +70,7 @@ Any threshold, feature definition, aggregation rule, or decision mapping changed
 
 ## 1. Purpose and Preconditions
 
-Milestone 3B determines whether the designated baseline iPhone and Minimal Swift Acquisition Prototype provide a sufficiently stable, reproducible native audio acquisition platform for subsequent Chemical Sound feasibility experiments.
+Milestone 3B determines whether the designated baseline iPhone and Minimal Swift Acquisition Prototype provide a sufficiently stable, reproducible native audio acquisition platform for subsequent Liquid Analyzer feasibility experiments.
 
 ### Preconditions
 - Milestone 3A source tests and native XCTest suites pass.
@@ -175,7 +175,7 @@ Document room, bench location, phone orientation, nearby equipment, HVAC state i
 
 ## 5. Pre-Registered Gate 0B Acceptance Thresholds
 
-> These are Chemical Sound engineering gates, not external scientific or regulatory standards. Freeze them before labelled Water-versus-Oil results are inspected.
+> These are Liquid Analyzer engineering gates, not external scientific or regulatory standards. Freeze them before labelled Water-versus-Oil results are inspected.
 
 | Criterion | Frozen threshold / rule | Fail consequence |
 | :--- | :--- | :--- |
@@ -247,7 +247,7 @@ Document room, bench location, phone orientation, nearby equipment, HVAC state i
 | `[ ]` | **DECISION D — PHENOMENON NOT YET ESTABLISHED** | Neither native nor segregated diagnostic establishes reproducible liquid-dependent separation after nuisance controls. Suspend classification development. |
 | `[ ]` | **`GATE_INCOMPLETE`** | Minimum independent preparations, sessions/days, or required holdouts were not completed. Collect only the missing preregistered evidence; do not score as failure or success. |
 
-> **Final control statement:** A failed Gate 0B does not establish that acoustic liquid discrimination is impossible. It establishes only that the specified Chemical Sound instrument and experiment did not demonstrate the required phenomenon under these frozen criteria.
+> **Final control statement:** A failed Gate 0B does not establish that acoustic liquid discrimination is impossible. It establishes only that the specified Liquid Analyzer instrument and experiment did not demonstrate the required phenomenon under these frozen criteria.
 
 ---
 

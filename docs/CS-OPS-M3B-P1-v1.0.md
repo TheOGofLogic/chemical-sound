@@ -1,4 +1,4 @@
-# CHEMICAL SOUND
+# LIQUID ANALYZER
 
 ## M3B Real-Device Operator SOP
 
@@ -27,7 +27,7 @@
 
 ### 1 — ACTIVATE
 
-Activate the Chemical Sound audio session.
+Activate the Liquid Analyzer audio session.
 
 Record the **realized**:
 - sample rate;
