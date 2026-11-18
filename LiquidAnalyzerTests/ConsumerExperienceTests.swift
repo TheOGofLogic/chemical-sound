@@ -564,17 +564,6 @@ final class ConsumerExperienceTests: XCTestCase {
         let protoStore = CalibratedPrototypeStore(fileURL: tempDir.appendingPathComponent("protos.json"))
         let prof = ReferenceLiquidProfile.provisionalLibrary[0]
         let sampleItem = ConsumerScanItem(
-            status: .unmatchedSignature,
-            title: "Unmatched Liquid",
-            formulaDisplay: "Acoustic Profile",
-            statusBadgeText: "Ambiguity Gate R1 • No Forced Match",
-            confidencePercent: nil,
-            scientificNote: "Held back.",
-            constituents: [],
-            tuneProfile: prof.tuneProfile,
-            measuredPeakHz: 2_314.5,
-            measuredCentroidHz: 3_390.2,
-            measuredDecayDBPerSec: 84.0,
             scanSequenceNumber: 1,
             batchRunID: "R1_20X_20261118_160000",
             batchScanIndex: 1,
@@ -585,7 +574,18 @@ final class ConsumerExperienceTests: XCTestCase {
             targetLockState: "R1_STATIONARY_LOCKED",
             targetLockScore: 1.0,
             gateDecision: "HELD_AMBIGUITY_GATE",
-            rejectionReason: "AMBIGUITY_MARGIN(m=0.07<0.11)"
+            rejectionReason: "AMBIGUITY_MARGIN(m=0.07<0.11)",
+            status: .unmatchedSignature,
+            title: "Unmatched Liquid",
+            formulaDisplay: "Acoustic Profile",
+            statusBadgeText: "Ambiguity Gate R1 • No Forced Match",
+            confidencePercent: nil,
+            scientificNote: "Held back.",
+            constituents: [],
+            tuneProfile: prof.tuneProfile,
+            measuredPeakHz: 2_314.5,
+            measuredCentroidHz: 3_390.2,
+            measuredDecayDBPerSec: 84.0
         )
         histStore.saveAll([sampleItem])
 
