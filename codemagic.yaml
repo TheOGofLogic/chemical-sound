@@ -6,6 +6,8 @@ workflows:
     integrations:
       app_store_connect: ChemicalSoundASC
     environment:
+      groups:
+        - ios_creds
       vars:
         BUNDLE_ID: "org.chemicalsound.acquisition"
         XCODE_PROJECT: "LiquidAnalyzer.xcodeproj"
@@ -24,7 +26,11 @@ workflows:
           fi
           xcodegen generate
           keychain initialize
-          openssl genrsa -out /tmp/dist_cert_key.pem 2048
+          if [ -n "${CERTIFICATE_PRIVATE_KEY:-}" ]; then
+            printf '%s\n' "$CERTIFICATE_PRIVATE_KEY" > /tmp/dist_cert_key.pem
+          else
+            openssl genrsa -out /tmp/dist_cert_key.pem 2048
+          fi
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \
