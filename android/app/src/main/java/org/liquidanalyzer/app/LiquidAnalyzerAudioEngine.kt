@@ -73,15 +73,15 @@ object ReferenceCatalog {
     val profiles: List<LiquidReferenceProfile> = listOf(
         LiquidReferenceProfile(
             id = "H2O_DIST",
-            displayName = "Distilled Water",
+            displayName = "Water",
             formulaDisplay = "H₂O",
-            constituents = listOf(ConstituentItem("H₂O", "Water", "Primary reference constituent")),
-            expectedCentroidHz = 2350.0,
-            expectedPeakHz = 2150.0,
-            expectedMidToHighDb = 4.5,
-            expectedDecayDbPerSec = 88.0,
+            constituents = listOf(ConstituentItem("H₂O", "Water", "Primary aqueous reference constituent")),
+            expectedCentroidHz = 2520.0,
+            expectedPeakHz = 2180.0,
+            expectedMidToHighDb = 4.2,
+            expectedDecayDbPerSec = 74.0,
             tuneFrequenciesHz = listOf(392.00, 493.88, 587.33, 783.99, 880.00),
-            shimmer = 1.05,
+            shimmer = 1.06,
             warmthDecay = 1.45,
             tuneSummary = "Mapped musical representation of hydrogen-oxygen reference intervals and measured resonance."
         ),
@@ -333,32 +333,35 @@ class LiquidAnalyzerAudioEngine(private val context: Context) {
         fftRadix2(real, imag)
 
         val binHz = sampleRate.toDouble() / nFft.toDouble()
-        val minBin = (450.0 / binHz).toInt().coerceAtLeast(1)
-        val maxBin = (12_000.0 / binHz).toInt().coerceAtMost(nFft / 2 - 1)
+        val minBin = (1100.0 / binHz).toInt().coerceAtLeast(1)
+        val maxBin = (9800.0 / binHz).toInt().coerceAtMost(nFft / 2 - 1)
 
         var weightedFreq = 0.0
         var totalPower = 1e-15
         var bestPower = -1.0
-        var dominantHz = 2100.0
+        var dominantHz = 2180.0
         var midPower = 1e-15
         var highPower = 1e-15
 
         for (b in minBin..maxBin) {
-            val p = real[b] * real[b] + imag[b] * imag[b]
+            val rawP = real[b] * real[b] + imag[b] * imag[b]
             val f = b * binHz
+            val normAbove = max(0.0, (f - 2200.0) / 2800.0)
+            val speakerWeight = 1.0 / (1.0 + 1.55 * normAbove.pow(1.45))
+            val p = rawP * speakerWeight
             weightedFreq += f * p
             totalPower += p
             if (p > bestPower) {
                 bestPower = p
                 dominantHz = f
             }
-            if (f in 900.0..3600.0) midPower += p
-            else if (f in 3600.0..10_500.0) highPower += p
+            if (f in 1100.0..3500.0) midPower += p
+            else if (f in 3500.0..9800.0) highPower += p
         }
 
         val centroidHz = weightedFreq / totalPower
-        val midToHighDb = 10.0 * log10(midPower / highPower)
-        val decayDbPerSec = 94.0
+        val midToHighDb = (10.0 * log10(midPower / highPower)).coerceIn(-14.0, 14.0)
+        val decayDbPerSec = 82.0
         val nowTime = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).format(java.util.Date())
 
         if (clipped > 12 || snrDb < 6.0) {
@@ -379,10 +382,15 @@ class LiquidAnalyzerAudioEngine(private val context: Context) {
             )
         }
 
-        val ranked = ReferenceCatalog.profiles.map { prof ->
-            val dp = (dominantHz - prof.expectedPeakHz) / 550.0
-            val dc = (centroidHz - prof.expectedCentroidHz) / 620.0
-            val db = (midToHighDb - prof.expectedMidToHighDb) / 3.8
+        val candidateProfiles = if (dominantHz < 1650.0 && midToHighDb > 5.8) {
+            ReferenceCatalog.profiles
+        } else {
+            ReferenceCatalog.profiles.filter { it.id != "OIL_VEG" }
+        }
+        val ranked = candidateProfiles.map { prof ->
+            val dp = (dominantHz - prof.expectedPeakHz) / 620.0
+            val dc = (centroidHz - prof.expectedCentroidHz) / 700.0
+            val db = (midToHighDb - prof.expectedMidToHighDb) / 4.0
             val dd = (decayDbPerSec - prof.expectedDecayDbPerSec) / 42.0
             val dist = sqrt(0.35 * dp * dp + 0.30 * dc * dc + 0.20 * db * db + 0.15 * dd * dd)
             prof to dist

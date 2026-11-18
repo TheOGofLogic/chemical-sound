@@ -80,31 +80,31 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
     public static let provisionalLibrary: [ReferenceLiquidProfile] = [
         ReferenceLiquidProfile(
             id: "H2O_DIST",
-            displayName: "Distilled Water",
+            displayName: "Water",
             formulaDisplay: "H₂O",
             categorySummary: "Aqueous Reference Profile",
             constituents: [
                 ReferenceConstituent(
                     symbol: "H₂O",
                     name: "Water",
-                    roleDescription: "Primary reference constituent"
+                    roleDescription: "Primary aqueous reference constituent"
                 )
             ],
-            expectedCentroidHz: 2_350.0,
-            expectedPeakHz: 2_150.0,
-            expectedMidToHighDB: 4.5,
-            expectedDecayDBPerSec: 88.0,
+            expectedCentroidHz: 2_520.0,
+            expectedPeakHz: 2_180.0,
+            expectedMidToHighDB: 4.2,
+            expectedDecayDBPerSec: 74.0,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O",
                 mappingSummary: "Mapped musical representation of hydrogen-oxygen reference intervals and measured resonance.",
                 baseFrequenciesHz: [392.00, 493.88, 587.33, 783.99, 880.00], // G4, B4, D5, G5, A5
-                shimmerMultiplier: 1.05,
+                shimmerMultiplier: 1.06,
                 warmthDecayPerSec: 1.45
             )
         ),
         ReferenceLiquidProfile(
             id: "NACL_AQ",
-            displayName: "Saline Water",
+            displayName: "Saline / Electrolyte Water",
             formulaDisplay: "H₂O + NaCl",
             categorySummary: "Aqueous Electrolyte Reference",
             constituents: [
@@ -116,53 +116,24 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                 ReferenceConstituent(
                     symbol: "NaCl",
                     name: "Sodium Chloride",
-                    roleDescription: "Dissolved salt reference constituent"
+                    roleDescription: "Dissolved electrolyte reference constituent"
                 )
             ],
-            expectedCentroidHz: 2_720.0,
-            expectedPeakHz: 2_520.0,
-            expectedMidToHighDB: 3.1,
-            expectedDecayDBPerSec: 96.0,
+            expectedCentroidHz: 3_180.0,
+            expectedPeakHz: 2_820.0,
+            expectedMidToHighDB: 1.2,
+            expectedDecayDBPerSec: 88.0,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + NaCl",
-                mappingSummary: "Mapped musical representation combining water harmonics with bright ionic fifth/ninth intervals.",
+                mappingSummary: "Mapped musical representation combining water harmonics with bright ionic fifth and ninth intervals.",
                 baseFrequenciesHz: [392.00, 587.33, 659.25, 739.99, 987.77], // G4, D5, E5, F#5, B5
                 shimmerMultiplier: 1.22,
                 warmthDecayPerSec: 1.65
             )
         ),
         ReferenceLiquidProfile(
-            id: "SUC_AQ",
-            displayName: "Sweetened Water",
-            formulaDisplay: "H₂O + C₁₂H₂₂O₁₁",
-            categorySummary: "Aqueous Carbohydrate Reference",
-            constituents: [
-                ReferenceConstituent(
-                    symbol: "H₂O",
-                    name: "Water",
-                    roleDescription: "Aqueous solvent reference"
-                ),
-                ReferenceConstituent(
-                    symbol: "C₁₂H₂₂O₁₁",
-                    name: "Sucrose",
-                    roleDescription: "Dissolved sugar reference constituent"
-                )
-            ],
-            expectedCentroidHz: 2_050.0,
-            expectedPeakHz: 1_880.0,
-            expectedMidToHighDB: 6.4,
-            expectedDecayDBPerSec: 118.0,
-            tuneProfile: ChemicalTuneProfile(
-                formulaDisplay: "H₂O + C₁₂H₂₂O₁₁",
-                mappingSummary: "Mapped musical representation pairing carbon bass intervals with warm damped water harmonics.",
-                baseFrequenciesHz: [261.63, 392.00, 493.88, 587.33, 659.25], // C4, G4, B4, D5, E5
-                shimmerMultiplier: 0.90,
-                warmthDecayPerSec: 1.95
-            )
-        ),
-        ReferenceLiquidProfile(
             id: "VIN_WHITE",
-            displayName: "White Vinegar",
+            displayName: "Vinegar",
             formulaDisplay: "H₂O + CH₃COOH",
             categorySummary: "Dilute Organic Acid Reference",
             constituents: [
@@ -177,10 +148,10 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Dilute organic acid constituent"
                 )
             ],
-            expectedCentroidHz: 2_540.0,
-            expectedPeakHz: 2_310.0,
-            expectedMidToHighDB: 3.8,
-            expectedDecayDBPerSec: 104.0,
+            expectedCentroidHz: 2_920.0,
+            expectedPeakHz: 2_580.0,
+            expectedMidToHighDB: 2.4,
+            expectedDecayDBPerSec: 96.0,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + CH₃COOH",
                 mappingSummary: "Mapped musical representation blending carbon-oxygen intervals with crisp upper harmonics.",
@@ -190,8 +161,192 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
             )
         ),
         ReferenceLiquidProfile(
+            id: "SUC_AQ",
+            displayName: "Sweetened Beverage",
+            formulaDisplay: "H₂O + C₁₂H₂₂O₁₁",
+            categorySummary: "Aqueous Carbohydrate Reference",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Water",
+                    roleDescription: "Aqueous solvent reference"
+                ),
+                ReferenceConstituent(
+                    symbol: "C₁₂H₂₂O₁₁",
+                    name: "Dissolved Sugars",
+                    roleDescription: "Carbohydrate solute reference constituent"
+                )
+            ],
+            expectedCentroidHz: 2_140.0,
+            expectedPeakHz: 1_840.0,
+            expectedMidToHighDB: 5.4,
+            expectedDecayDBPerSec: 108.0,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + C₁₂H₂₂O₁₁",
+                mappingSummary: "Mapped musical representation pairing carbon bass intervals with warm damped water harmonics.",
+                baseFrequenciesHz: [261.63, 392.00, 493.88, 587.33, 659.25], // C4, G4, B4, D5, E5
+                shimmerMultiplier: 0.90,
+                warmthDecayPerSec: 1.95
+            )
+        ),
+        ReferenceLiquidProfile(
+            id: "MILK_DAIRY",
+            displayName: "Milk",
+            formulaDisplay: "H₂O + Lactose · Lipids",
+            categorySummary: "Aqueous Colloidal Emulsion Reference",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Water",
+                    roleDescription: "Primary aqueous phase"
+                ),
+                ReferenceConstituent(
+                    symbol: "C₁₂H₂₂O₁₁",
+                    name: "Lactose & Milk Solids",
+                    roleDescription: "Dissolved carbohydrate & protein phase"
+                ),
+                ReferenceConstituent(
+                    symbol: "Lipids",
+                    name: "Emulsified Milk Fat",
+                    roleDescription: "Dispersed colloidal lipid droplets"
+                )
+            ],
+            expectedCentroidHz: 2_260.0,
+            expectedPeakHz: 1_960.0,
+            expectedMidToHighDB: 4.8,
+            expectedDecayDBPerSec: 112.0,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + Lactose",
+                mappingSummary: "Mapped musical representation using soft, warm F-major ninth intervals reflecting colloidal damping.",
+                baseFrequenciesHz: [349.23, 440.00, 523.25, 659.25, 783.99], // F4, A4, C5, E5, G5
+                shimmerMultiplier: 0.86,
+                warmthDecayPerSec: 2.05
+            )
+        ),
+        ReferenceLiquidProfile(
+            id: "COFFEE_DARK",
+            displayName: "Coffee / Dark Beverage",
+            formulaDisplay: "H₂O + C₈H₁₀N₄O₂",
+            categorySummary: "Brewed Aqueous Solute Reference",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Water",
+                    roleDescription: "Primary brewed solvent"
+                ),
+                ReferenceConstituent(
+                    symbol: "C₈H₁₀N₄O₂",
+                    name: "Caffeine & Roasted Solutes",
+                    roleDescription: "Dissolved aromatic & alkaloid compounds"
+                )
+            ],
+            expectedCentroidHz: 2_680.0,
+            expectedPeakHz: 2_320.0,
+            expectedMidToHighDB: 3.1,
+            expectedDecayDBPerSec: 94.0,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + C₈H₁₀N₄O₂",
+                mappingSummary: "Mapped musical representation blending resonant E-minor ninth harmonics with warm mid-band overtones.",
+                baseFrequenciesHz: [329.63, 392.00, 493.88, 587.33, 739.99], // E4, G4, B4, D5, F#5
+                shimmerMultiplier: 0.98,
+                warmthDecayPerSec: 1.75
+            )
+        ),
+        ReferenceLiquidProfile(
+            id: "CITRUS_JUICE",
+            displayName: "Citrus / Fruit Juice",
+            formulaDisplay: "H₂O + C₆H₈O₇ · Sugars",
+            categorySummary: "Organic Acid & Sugar Beverage Reference",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Water",
+                    roleDescription: "Primary juice base"
+                ),
+                ReferenceConstituent(
+                    symbol: "C₆H₈O₇",
+                    name: "Citric & Organic Acids",
+                    roleDescription: "Fruit acid reference constituent"
+                ),
+                ReferenceConstituent(
+                    symbol: "C₆H₁₂O₆",
+                    name: "Natural Sugars",
+                    roleDescription: "Dissolved carbohydrate constituent"
+                )
+            ],
+            expectedCentroidHz: 2_420.0,
+            expectedPeakHz: 2_080.0,
+            expectedMidToHighDB: 3.9,
+            expectedDecayDBPerSec: 102.0,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + C₆H₈O₇",
+                mappingSummary: "Mapped musical representation featuring bright C-Lydian intervals for fruit acids and warm harmonic sustain.",
+                baseFrequenciesHz: [261.63, 329.63, 392.00, 493.88, 739.99], // C4, E4, G4, B4, F#5
+                shimmerMultiplier: 1.12,
+                warmthDecayPerSec: 1.80
+            )
+        ),
+        ReferenceLiquidProfile(
+            id: "AQUA_SURFACTANT",
+            displayName: "Packaged Aqueous Solution",
+            formulaDisplay: "H₂O + Dissolved Solutes",
+            categorySummary: "Formulated Household / Bottled Solution",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Water",
+                    roleDescription: "Primary liquid carrier"
+                ),
+                ReferenceConstituent(
+                    symbol: "Solutes",
+                    name: "Formulated Active & Ionic Agents",
+                    roleDescription: "Packaged household, personal-care, or flavored solute class"
+                )
+            ],
+            expectedCentroidHz: 2_840.0,
+            expectedPeakHz: 2_460.0,
+            expectedMidToHighDB: 2.2,
+            expectedDecayDBPerSec: 98.0,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + Solutes",
+                mappingSummary: "Mapped musical representation pairing shimmering A-major add9 intervals with clean container resonance.",
+                baseFrequenciesHz: [440.00, 554.37, 659.25, 880.00, 987.77], // A4, C#5, E5, A5, B5
+                shimmerMultiplier: 1.18,
+                warmthDecayPerSec: 1.72
+            )
+        ),
+        ReferenceLiquidProfile(
+            id: "ISOPROPYL_ALC",
+            displayName: "Rubbing Alcohol Solution",
+            formulaDisplay: "H₂O + C₃H₈O",
+            categorySummary: "Volatile Alcohol-Water Reference",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "C₃H₈O",
+                    name: "Isopropyl / Ethyl Alcohol",
+                    roleDescription: "Volatile alcohol reference constituent"
+                ),
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Water",
+                    roleDescription: "Aqueous cosolvent"
+                )
+            ],
+            expectedCentroidHz: 3_480.0,
+            expectedPeakHz: 3_150.0,
+            expectedMidToHighDB: -0.6,
+            expectedDecayDBPerSec: 80.0,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + C₃H₈O",
+                mappingSummary: "Mapped musical representation using crisp high-register B-minor pentatonic harmonics.",
+                baseFrequenciesHz: [493.88, 587.33, 659.25, 739.99, 987.77], // B4, D5, E5, F#5, B5
+                shimmerMultiplier: 1.26,
+                warmthDecayPerSec: 1.50
+            )
+        ),
+        ReferenceLiquidProfile(
             id: "OIL_VEG",
-            displayName: "Vegetable Oil",
+            displayName: "Cooking / Vegetable Oil",
             formulaDisplay: "Triglyceride",
             categorySummary: "Viscous Lipid Reference",
             constituents: [
@@ -201,10 +356,10 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Viscous lipid reference class"
                 )
             ],
-            expectedCentroidHz: 1_580.0,
-            expectedPeakHz: 1_420.0,
-            expectedMidToHighDB: 9.2,
-            expectedDecayDBPerSec: 155.0,
+            expectedCentroidHz: 1_880.0,
+            expectedPeakHz: 1_580.0,
+            expectedMidToHighDB: 6.4,
+            expectedDecayDBPerSec: 128.0,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "C · H · O",
                 mappingSummary: "Mapped musical representation featuring warm, rapidly damped low-register carbon-chain harmonics.",

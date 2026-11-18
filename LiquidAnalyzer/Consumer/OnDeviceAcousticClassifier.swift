@@ -13,12 +13,13 @@ public struct ExtractedConsumerFeatures: Equatable, Sendable {
 }
 
 /// Layer 2 on-device acoustic feature analyzer and 3-state experimental reference matcher.
-/// Never fabricates unvalidated percentage purity claims; enforces `INVALID_MEASUREMENT`,
-/// `NO_VALIDATED_MATCH`, and `REFERENCE_MATCH` with explicit experimental labeling.
+/// Combines clean 1.1–9.8 kHz impulse-response echo analysis with on-device optical container/liquid context,
+/// and never fabricates unvalidated purity percentages.
 public struct OnDeviceAcousticClassifier: Sendable {
     public let referenceLibrary: [ReferenceLiquidProfile]
     public let distanceThreshold: Double
     public let minimumSNRDB: Double
+    private let visualAnalyzer = VisualLiquidContextAnalyzer()
 
     public init(
         referenceLibrary: [ReferenceLiquidProfile] = ReferenceLiquidProfile.provisionalLibrary,
@@ -95,32 +96,54 @@ public struct OnDeviceAcousticClassifier: Sendable {
             )
         }
 
-        // 2. Standardized distance comparison against calibrated/provisional reference profiles
-        let scored: [(profile: ReferenceLiquidProfile, distance: Double)] = referenceLibrary.map { prof in
-            let dPeak = (features.dominantPeakHz - prof.expectedPeakHz) / 550.0
-            let dCent = (features.spectralCentroidHz - prof.expectedCentroidHz) / 620.0
-            let dBand = (features.midToHighBandDB - prof.expectedMidToHighDB) / 3.8
+        // 2. Visual Container & Optical Regime Verification (when camera frame is provided)
+        let visual = visualAnalyzer.analyze(jpegData: thumbnailJPEGData)
+        if visual.hint == .noContainerOrLiquid {
+            return ConsumerScanItem(
+                status: .unclearScan,
+                title: "No Liquid Detected",
+                formulaDisplay: "Aim at Container",
+                statusBadgeText: "No Liquid in Frame",
+                confidencePercent: nil,
+                scientificNote: "Point your camera closer at a glass, cup, bowl, or bottle holding liquid and tap SCAN again.",
+                constituents: [],
+                tuneProfile: Self.buildAcousticSignatureTune(features: features, formula: "Room Echo"),
+                measuredPeakHz: features.dominantPeakHz,
+                measuredCentroidHz: features.spectralCentroidHz,
+                measuredDecayDBPerSec: features.decaySlopeDBPerSec,
+                thumbnailJPEGData: thumbnailJPEGData
+            )
+        }
+
+        // 3. Candidate selection & standardized acoustic distance comparison
+        let candidateSpec = resolveEligibleCandidates(for: visual.hint, features: features)
+        let scored: [(profile: ReferenceLiquidProfile, distance: Double)] = candidateSpec.profiles.map { prof in
+            let dPeak = (features.dominantPeakHz - prof.expectedPeakHz) / 620.0
+            let dCent = (features.spectralCentroidHz - prof.expectedCentroidHz) / 700.0
+            let dBand = (features.midToHighBandDB - prof.expectedMidToHighDB) / 4.0
             let dDecay = (features.decaySlopeDBPerSec - prof.expectedDecayDBPerSec) / 42.0
-            let dist = sqrt(0.35 * dPeak * dPeak + 0.30 * dCent * dCent + 0.20 * dBand * dBand + 0.15 * dDecay * dDecay)
-            return (prof, dist)
+            let rawDist = sqrt(0.35 * dPeak * dPeak + 0.30 * dCent * dCent + 0.20 * dBand * dBand + 0.15 * dDecay * dDecay)
+            let weight = candidateSpec.priorMultipliers[prof.id] ?? 1.0
+            return (prof, rawDist * weight)
         }.sorted { $0.distance < $1.distance }
 
         guard let best = scored.first else {
             return buildUnmatchedItem(features: features, thumbnailJPEGData: thumbnailJPEGData)
         }
 
-        let secondDistance = scored.count > 1 ? scored[1].distance : (best.distance + 1.0)
+        let secondDistance = scored.count > 1 ? scored[1].distance : (best.distance + 0.85)
         let margin = secondDistance - best.distance
+        let effectiveThreshold = (visual.hint == .audioOnly) ? distanceThreshold : max(distanceThreshold, 4.40)
 
-        // 3. Open-Set Unknown Rejection (`NO_VALIDATED_MATCH`)
-        if best.distance > distanceThreshold || margin < 0.02 {
+        // 4. Open-Set Unknown Rejection (`NO_VALIDATED_MATCH`)
+        if best.distance > effectiveThreshold || (visual.hint == .audioOnly && margin < 0.02) {
             return buildUnmatchedItem(features: features, thumbnailJPEGData: thumbnailJPEGData)
         }
 
-        // 4. Experimental Reference Match (`REFERENCE_MATCH`) — bounded experimental confidence (never 99.9%)
-        let rawSimilarity = exp(-0.48 * best.distance) * (0.78 + 0.22 * min(1.0, margin / 0.45))
-        let snrFactor = min(1.0, max(0.75, features.activeSNRDB / 26.0))
-        let boundedConfidence = min(92, max(58, Int(round(rawSimilarity * snrFactor * 94.0))))
+        // 5. Experimental Reference Match (`REFERENCE_MATCH`) — bounded experimental confidence (never 99.9%)
+        let rawSimilarity = exp(-0.34 * best.distance) * (0.84 + 0.16 * min(1.0, margin / 0.40))
+        let snrFactor = min(1.0, max(0.80, features.activeSNRDB / 22.0))
+        let boundedConfidence = min(92, max(64, Int(round(rawSimilarity * snrFactor * 93.0))))
 
         return ConsumerScanItem(
             status: .referenceMatch,
@@ -128,7 +151,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
             formulaDisplay: best.profile.formulaDisplay,
             statusBadgeText: "Experimental Reference Match • \(boundedConfidence)% Similarity",
             confidencePercent: boundedConfidence,
-            scientificNote: "Estimated from acoustic resonance similarity to the \(best.profile.displayName.lowercased()) reference profile. Experimental research result—not a laboratory chemical or safety test.",
+            scientificNote: "Estimated from acoustic reflection analysis and container context against the \(best.profile.displayName.lowercased()) reference profile. Experimental research result—not a laboratory chemical or safety test.",
             constituents: best.profile.constituents,
             tuneProfile: best.profile.tuneProfile,
             measuredPeakHz: features.dominantPeakHz,
@@ -136,6 +159,68 @@ public struct OnDeviceAcousticClassifier: Sendable {
             measuredDecayDBPerSec: features.decaySlopeDBPerSec,
             thumbnailJPEGData: thumbnailJPEGData
         )
+    }
+
+    private func resolveEligibleCandidates(
+        for hint: VisualLiquidHint,
+        features: ExtractedConsumerFeatures
+    ) -> (profiles: [ReferenceLiquidProfile], priorMultipliers: [String: Double]) {
+        let allowedIDs: Set<String>
+        var priors: [String: Double] = [:]
+
+        switch hint {
+        case .audioOnly:
+            // In headless audio-only mode, prevent viscous lipid corner match unless resonance is genuinely low & damped
+            if features.dominantPeakHz < 1_700.0 && features.midToHighBandDB > 5.8 {
+                return (referenceLibrary, [:])
+            }
+            let filtered = referenceLibrary.filter { $0.id != "OIL_VEG" }
+            return (filtered.isEmpty ? referenceLibrary : filtered, [:])
+
+        case .noContainerOrLiquid:
+            return ([], [:])
+
+        case .labeledWater:
+            allowedIDs = ["H2O_DIST"]
+
+        case .labeledSaline:
+            allowedIDs = ["NACL_AQ"]
+
+        case .labeledVinegar:
+            allowedIDs = ["VIN_WHITE"]
+
+        case .labeledOil, .goldenOil:
+            allowedIDs = ["OIL_VEG"]
+
+        case .labeledMilk, .milkOpaqueWhite:
+            allowedIDs = ["MILK_DAIRY"]
+
+        case .labeledJuice, .citrusOrAmberJuice:
+            allowedIDs = ["CITRUS_JUICE", "SUC_AQ"]
+            priors["CITRUS_JUICE"] = 0.80
+
+        case .labeledCoffeeOrCola, .darkBeverage:
+            allowedIDs = ["COFFEE_DARK", "SUC_AQ"]
+            priors["COFFEE_DARK"] = 0.78
+
+        case .labeledAlcohol:
+            allowedIDs = ["ISOPROPYL_ALC"]
+
+        case .labeledSurfactant, .coloredPackagedLiquid:
+            allowedIDs = ["AQUA_SURFACTANT", "SUC_AQ"]
+            priors["AQUA_SURFACTANT"] = 0.76
+
+        case .clearAqueous:
+            allowedIDs = ["H2O_DIST", "NACL_AQ", "VIN_WHITE"]
+            priors["H2O_DIST"] = 0.62
+        }
+
+        let matched = referenceLibrary.filter { allowedIDs.contains($0.id) }
+        if matched.isEmpty {
+            let fallback = referenceLibrary.filter { $0.id != "OIL_VEG" }
+            return (fallback.isEmpty ? referenceLibrary : fallback, priors)
+        }
+        return (matched, priors)
     }
 
     public func extractFeatures(
@@ -151,10 +236,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 activeSNRDB: 0.0,
                 peakDBFS: -120.0,
                 clippedSamples: 0,
-                dominantPeakHz: 1_800.0,
-                spectralCentroidHz: 2_000.0,
+                dominantPeakHz: 2_180.0,
+                spectralCentroidHz: 2_520.0,
                 midToHighBandDB: 4.0,
-                decaySlopeDBPerSec: 100.0
+                decaySlopeDBPerSec: 80.0
             )
         }
 
@@ -177,14 +262,18 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let actDB = ImmediateAudioAnalyzer.linearToDBFS(actRMS)
         let snrDB = max(0.0, actDB - preDB)
 
-        // Deconvolve with matched inverse filter if available; normalize echo tail against direct arrival
-        // so built-in iPhone speaker coloration (3-6 kHz peak) cancels out automatically on real hardware.
+        // Deconvolve with matched inverse filter when present, isolating the external target reflection window
+        // (+2.2 ms to +28.0 ms after direct speaker-to-mic arrival t0) to skip direct chassis coupling and late noise.
         let analysisSignal: [Double]
-        var directArrivalSignal: [Double]?
+        let applyHardwareSpeakerShelf: Bool
+        var noiseFloorPowerPerSample = 0.0
+
         if let inv = inverseFilter, !inv.isEmpty, samples.count > actStart + 512 {
+            applyHardwareSpeakerShelf = true
             let responseSlice = Array(samples[actStart..<samples.count]).map { $0.isFinite ? Double($0) : 0.0 }
             let invDouble = inv.map { $0.isFinite ? Double($0) : 0.0 }
             let ir = Self.fastLinearConvolve(responseSlice, invDouble)
+
             var peakIdx = 0
             var maxAbs = 0.0
             for (idx, val) in ir.enumerated() {
@@ -194,24 +283,28 @@ public struct OnDeviceAcousticClassifier: Sendable {
                     peakIdx = idx
                 }
             }
-            let dirStart = max(0, peakIdx - Int(0.0005 * sampleRateHz))
-            let dirEnd = min(ir.count, peakIdx + Int(0.0012 * sampleRateHz))
-            if dirEnd - dirStart >= 32 {
-                directArrivalSignal = Array(ir[dirStart..<dirEnd])
+
+            let tailStart = min(ir.count, peakIdx + Int(0.0022 * sampleRateHz))
+            let tailEnd = min(ir.count, peakIdx + Int(0.0280 * sampleRateHz))
+
+            let floorStart = min(ir.count, peakIdx + Int(0.0480 * sampleRateHz))
+            let floorEnd = min(ir.count, peakIdx + Int(0.0680 * sampleRateHz))
+            if floorEnd - floorStart >= 128 {
+                let floorSum = ir[floorStart..<floorEnd].reduce(0.0) { $0 + $1 * $1 }
+                noiseFloorPowerPerSample = floorSum / Double(floorEnd - floorStart)
             }
-            // Extract causal resonance tail window (+1.2 ms to +42 ms after impulse arrival t0)
-            let tailStart = min(ir.count, peakIdx + Int(0.0012 * sampleRateHz))
-            let tailEnd = min(ir.count, peakIdx + Int(0.0420 * sampleRateHz))
+
             if tailEnd - tailStart >= 256 {
                 analysisSignal = Array(ir[tailStart..<tailEnd])
             } else {
-                analysisSignal = Array(samples[actStart..<actEnd]).map { Double($0) }
+                analysisSignal = Array(samples[actStart..<actEnd]).map { $0.isFinite ? Double($0) : 0.0 }
             }
         } else {
+            applyHardwareSpeakerShelf = false
             analysisSignal = Array(samples[actStart..<max(actStart + 1, actEnd)]).map { $0.isFinite ? Double($0) : 0.0 }
         }
 
-        // Compute Hann-windowed power spectrum over 450 Hz - 12 kHz
+        // Compute Hann-windowed power spectrum over clean iPhone linear passband (1,100 Hz - 9,800 Hz)
         let nFFT = 4_096
         var real = [Double](repeating: 0.0, count: nFFT)
         var imag = [Double](repeating: 0.0, count: nFFT)
@@ -224,76 +317,63 @@ public struct OnDeviceAcousticClassifier: Sendable {
         }
         Self.fftRadix2(real: &real, imag: &imag, inverse: false)
 
-        var directPower: [Double]?
-        if let dirSig = directArrivalSignal, dirSig.count > 1 {
-            var dR = [Double](repeating: 0.0, count: nFFT)
-            var dI = [Double](repeating: 0.0, count: nFFT)
-            let dc = min(dirSig.count, nFFT)
-            for i in 0..<dc {
-                let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(i) / Double(dc - 1)))
-                dR[i] = dirSig[i] * w
-            }
-            Self.fftRadix2(real: &dR, imag: &dI, inverse: false)
-            var maxDP = 1e-12
-            var rawDP = [Double](repeating: 0.0, count: nFFT / 2)
-            for b in 0..<(nFFT / 2) {
-                let p = dR[b] * dR[b] + dI[b] * dI[b]
-                rawDP[b] = p
-                if p > maxDP { maxDP = p }
-            }
-            let regFloor = 0.08 * maxDP
-            directPower = rawDP.map { $0 + regFloor }
-        }
-
         let binHz = sampleRateHz / Double(nFFT)
-        let minBin = max(1, Int(ceil(450.0 / binHz)))
-        let maxBin = min(nFFT / 2 - 1, Int(floor(12_000.0 / binHz)))
+        let minBin = max(1, Int(ceil(1_100.0 / binHz)))
+        let maxBin = min(nFFT / 2 - 1, Int(floor(9_800.0 / binHz)))
 
         var weightedFreqSum = 0.0
         var powerSum = 1e-15
         var maxBinPower = -1.0
-        var dominantFreq = 2_150.0
+        var dominantFreq = 2_180.0
         var midBandPower = 1e-15
         var highBandPower = 1e-15
 
         if maxBin > minBin {
             for b in minBin...maxBin {
                 let rawP = real[b] * real[b] + imag[b] * imag[b]
-                let p: Double
-                if let dp = directPower {
-                    p = rawP / dp[b]
-                } else {
-                    p = rawP
-                }
                 let f = Double(b) * binHz
+
+                // Smooth bounded shelf compensating built-in smartphone micro-speaker 4-8 kHz emphasis
+                // without ever amplifying low-frequency room rumble.
+                let speakerWeight: Double
+                if applyHardwareSpeakerShelf {
+                    let normAbove = max(0.0, (f - 2_200.0) / 2_800.0)
+                    speakerWeight = 1.0 / (1.0 + 1.55 * pow(normAbove, 1.45))
+                } else {
+                    speakerWeight = 1.0
+                }
+
+                let p = rawP * speakerWeight
                 weightedFreqSum += f * p
                 powerSum += p
                 if p > maxBinPower {
                     maxBinPower = p
                     dominantFreq = f
                 }
-                if f >= 900.0 && f < 3_600.0 {
+                if f >= 1_100.0 && f < 3_500.0 {
                     midBandPower += p
-                } else if f >= 3_600.0 && f <= 10_500.0 {
+                } else if f >= 3_500.0 && f <= 9_800.0 {
                     highBandPower += p
                 }
             }
         }
 
         let centroidHz = weightedFreqSum / powerSum
-        let midToHighDB = 10.0 * log10(midBandPower / highBandPower)
+        let midToHighDB = min(14.0, max(-14.0, 10.0 * log10(midBandPower / highBandPower)))
 
-        // Estimate envelope decay rate (dB/s) across first vs. second half of resonance window
+        // Estimate envelope decay rate (dB/s) across reflection window, subtracting late noise floor when measured
         let half = analysisSignal.count / 2
         let decayDBPerSec: Double
         if half >= 64 {
-            let earlyE = analysisSignal[0..<half].reduce(1e-15) { $0 + $1 * $1 } / Double(half)
-            let lateE = analysisSignal[half..<analysisSignal.count].reduce(1e-15) { $0 + $1 * $1 } / Double(analysisSignal.count - half)
-            let dropDB = max(1.5, 10.0 * log10(earlyE / max(lateE, 1e-15)))
-            let dtSec = max(0.005, Double(half) / sampleRateHz)
-            decayDBPerSec = min(260.0, max(30.0, dropDB / dtSec))
+            let rawEarly = analysisSignal[0..<half].reduce(1e-15) { $0 + $1 * $1 } / Double(half)
+            let rawLate = analysisSignal[half..<analysisSignal.count].reduce(1e-15) { $0 + $1 * $1 } / Double(analysisSignal.count - half)
+            let earlyE = max(1e-14, rawEarly - 0.85 * noiseFloorPowerPerSample)
+            let lateE = max(1e-14, rawLate - 0.85 * noiseFloorPowerPerSample)
+            let dropDB = min(6.5, max(1.2, 10.0 * log10(earlyE / max(lateE, earlyE * 0.18))))
+            let dtSec = max(0.045, Double(half) / sampleRateHz)
+            decayDBPerSec = min(145.0, max(50.0, dropDB / dtSec))
         } else {
-            decayDBPerSec = 95.0
+            decayDBPerSec = 85.0
         }
 
         return ExtractedConsumerFeatures(
@@ -337,9 +417,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
         features: ExtractedConsumerFeatures,
         formula: String
     ) -> ChemicalTuneProfile {
-        // Quantize measured dominant peak into a pleasant D-major pentatonic harmonic chord
         let pentatonicBase: [Double] = [293.66, 329.63, 369.99, 440.00, 493.88, 587.33, 659.25, 739.99, 880.00]
-        let normalizedIdx = max(0, min(pentatonicBase.count - 4, Int((features.dominantPeakHz - 900.0) / 550.0)))
+        let normalizedIdx = max(0, min(pentatonicBase.count - 4, Int((features.dominantPeakHz - 1_100.0) / 550.0)))
         let chord = [
             pentatonicBase[normalizedIdx],
             pentatonicBase[min(pentatonicBase.count - 1, normalizedIdx + 1)],
@@ -350,7 +429,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
             formulaDisplay: formula,
             mappingSummary: "Mapped musical representation derived directly from the liquid's measured acoustic resonance frequencies.",
             baseFrequenciesHz: chord,
-            shimmerMultiplier: max(0.75, min(1.30, features.spectralCentroidHz / 2_400.0)),
+            shimmerMultiplier: max(0.75, min(1.30, features.spectralCentroidHz / 2_600.0)),
             warmthDecayPerSec: max(1.3, min(2.4, features.decaySlopeDBPerSec / 65.0))
         )
     }
