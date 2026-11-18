@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Liquid Analyzer — Interactive Preview</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="workspace-shell">
+    <!-- External Tester Control Strip (Outside Phone Bezel — For Pre-Store Testing Only) -->
+    <aside class="tester-dock" aria-label="Pre-submission sample simulator">
+      <div class="tester-brand">
+        <span class="drop-badge">💧</span>
+        <div>
+          <h1>Liquid Analyzer</h1>
+          <p>Pre-Submission Interactive Test Studio (v0.3.0 • iOS &amp; Android Parity)</p>
+        </div>
+      </div>
+
+      <div class="tester-controls">
+        <label for="presetSelect">Test Sample Mode:</label>
+        <select id="presetSelect">
+          <option value="H2O_DIST" selected>Distilled Water (H₂O)</option>
+          <option value="NACL_AQ">Saline Water (H₂O + NaCl)</option>
+          <option value="SUC_AQ">Sweetened Water (H₂O + C₁₂H₂₂O₁₁)</option>
+          <option value="VIN_WHITE">White Vinegar (H₂O + CH₃COOH)</option>
+          <option value="OIL_VEG">Vegetable Oil (Triglyceride)</option>
+          <option value="UNMATCHED">Unknown / Unmatched Liquid</option>
+          <option value="LIVE_MIC">Live Microphone + Acoustic Sweep</option>
+        </select>
+        <button id="toggleCameraBtn" class="dock-btn" type="button">Enable Live Camera</button>
+      </div>
+    </aside>
+
+    <!-- iPhone / Mobile Device Viewport -->
+    <main class="phone-frame" id="phoneFrame">
+      <div class="phone-notch" aria-hidden="true">
+        <span class="status-time">9:41</span>
+        <div class="dynamic-island"></div>
+        <span class="status-icons">5G 🔋</span>
+      </div>
+
+      <!-- TAB 1: SCAN (AIM -> SCANNING -> RESULT -> CHEMICAL TUNE) -->
+      <section class="tab-panel active" id="tab-scan">
+        <!-- Top App Header -->
+        <header class="app-topbar" id="scanTopbar">
+          <button class="icon-btn hidden" id="headerBackBtn" type="button" aria-label="Back">
+            ‹
+          </button>
+          <div class="topbar-spacer" id="headerLeftSpacer"></div>
+          <div class="brand-title" id="headerTitleGroup">
+            <span class="cyan-drop">💧</span>
+            <span id="headerTitleText">Liquid Analyzer</span>
+          </div>
+          <button class="icon-btn" id="headerGearBtn" type="button" aria-label="Open More Settings">
+            ⚙
+          </button>
+        </header>
+
+        <!-- FLOW STEP 1: AIM -->
+        <div class="flow-screen active" id="screen-aim">
+          <div class="camera-stage" id="cameraStage">
+            <video id="cameraVideo" autoplay playsinline muted class="camera-video hidden"></video>
+            <canvas id="snapshotCanvas" width="320" height="320" class="hidden"></canvas>
+
+            <!-- Studio Glass Backdrop (when live camera is off or desktop) -->
+            <div class="studio-backdrop" id="studioBackdrop">
+              <div class="studio-countertop"></div>
+              <div class="crystal-glass-wrap">
+                <svg viewBox="0 0 180 220" class="crystal-glass-svg" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="glassBodyGrad" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.88" />
+                      <stop offset="30%" stop-color="#d8ecff" stop-opacity="0.45" />
+                      <stop offset="72%" stop-color="#eef7ff" stop-opacity="0.38" />
+                      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.85" />
+                    </linearGradient>
+                    <linearGradient id="liquidFillGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#b8e4ff" stop-opacity="0.85" />
+                      <stop offset="55%" stop-color="#7cc4fa" stop-opacity="0.65" />
+                      <stop offset="100%" stop-color="#cbeaff" stop-opacity="0.90" />
+                    </linearGradient>
+                  </defs>
+                  <ellipse cx="90" cy="202" rx="54" ry="9" fill="rgba(15,23,42,0.16)" />
+                  <polygon points="28,24 152,24 138,196 42,196" fill="url(#glassBodyGrad)" stroke="rgba(148,163,184,0.7)" stroke-width="2.5" />
+                  <polygon id="aimLiquidPolygon" points="34,76 146,76 135,190 45,190" fill="url(#liquidFillGrad)" />
+                  <ellipse cx="90" cy="76" rx="56" ry="7" fill="rgba(255,255,255,0.72)" stroke="#ffffff" stroke-width="1.5" />
+                  <ellipse cx="90" cy="24" rx="62" ry="7" fill="rgba(255,255,255,0.30)" stroke="rgba(255,255,255,0.9)" stroke-width="2" />
+                  <line x1="44" y1="36" x2="52" y2="184" stroke="rgba(255,255,255,0.75)" stroke-width="4" stroke-linecap="round" />
+                </svg>
+              </div>
+            </div>
+
+            <!-- Targeting Reticle Overlay -->
+            <div class="aim-overlay">
+              <div class="reticle-box" aria-hidden="true">
+                <span class="corner tl"></span>
+                <span class="corner tr"></span>
+                <span class="corner bl"></span>
+                <span class="corner br"></span>
+              </div>
+
+              <div class="aim-pill">Aim at the liquid</div>
+
+              <div class="scan-cta-group">
+                <button id="scanPrimaryBtn" class="scan-primary-btn" type="button">
+                  <span class="wave-glyph">ılılı</span>
+                  <span>SCAN</span>
+                </button>
+                <p class="aim-footnote">Camera guides aiming • Sound waves measure the liquid</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FLOW STEP 2: SCANNING -->
+        <div class="flow-screen" id="screen-scanning">
+          <div class="scanning-stage">
+            <div class="sonar-container" aria-hidden="true">
+              <div class="sonar-ring r1"></div>
+              <div class="sonar-ring r2"></div>
+              <div class="sonar-ring r3"></div>
+              <div class="sonar-circle">
+                <div class="blue-wave-bars" id="scanningWaveBars"></div>
+              </div>
+            </div>
+
+            <h2 class="scanning-title">Analyzing Liquid...</h2>
+            <p class="scanning-subtitle">Listening to sound-wave reflections</p>
+
+            <div class="scan-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="scanProgressTrack">
+              <div class="scan-progress-fill" id="scanProgressFill"></div>
+            </div>
+
+            <button id="cancelScanBtn" class="cancel-pill-btn" type="button">Cancel</button>
+          </div>
+        </div>
+
+        <!-- FLOW STEP 3: RESULT -->
+        <div class="flow-screen" id="screen-result">
+          <div class="result-scroll">
+            <article class="result-card">
+              <div class="result-banner green" id="resultBanner">
+                <span id="resultBannerLabel">Result</span>
+                <span class="result-check" id="resultBannerIcon">✓</span>
+              </div>
+
+              <div class="result-body">
+                <h2 class="result-liquid-name" id="resultLiquidName">Distilled Water</h2>
+                <p class="result-formula" id="resultFormula">H₂O</p>
+                <span class="result-exp-badge" id="resultBadge">Experimental Reference Match • 86% Similarity</span>
+
+                <div class="result-visual-box">
+                  <img id="resultSnapshotImg" alt="Captured liquid container" class="result-snapshot hidden" />
+                  <div id="resultGlassFallback" class="result-glass-mini">
+                    <svg viewBox="0 0 140 160" width="96" height="110" aria-hidden="true">
+                      <ellipse cx="70" cy="148" rx="40" ry="7" fill="rgba(15,23,42,0.12)" />
+                      <polygon points="24,18 116,18 105,142 35,142" fill="#eef7ff" stroke="#94a3b8" stroke-width="2" />
+                      <polygon id="resultLiquidPoly" points="29,56 111,56 103,138 37,138" fill="#93d3fc" opacity="0.82" />
+                      <ellipse cx="70" cy="56" rx="41" ry="5" fill="#dbf0ff" stroke="#ffffff" stroke-width="1.2" />
+                      <line x1="36" y1="26" x2="43" y2="132" stroke="#ffffff" stroke-width="3" stroke-linecap="round" />
+                    </svg>
+                  </div>
+                </div>
+
+                <!-- Clearly Separated Orange Composition Panel -->
+                <section class="composition-panel" aria-labelledby="compHeading">
+                  <div class="composition-header">
+                    <span class="comp-title" id="compHeading">🟠 Composition</span>
+                    <span class="comp-tag">Experimental</span>
+                  </div>
+                  <div class="composition-rows" id="compositionRows"></div>
+                </section>
+
+                <p class="scientific-note" id="resultScientificNote">
+                  Estimated from acoustic resonance similarity to the distilled water reference profile. Experimental research result—not a laboratory chemical or safety test.
+                </p>
+
+                <button id="openTuneBtn" class="play-tune-cta" type="button">
+                  <span class="music-icon">♫</span>
+                  <span>Play Chemical Tune</span>
+                </button>
+
+                <button id="scanAnotherBtn" class="scan-again-link" type="button">
+                  ↻ Scan Another Liquid
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <!-- FLOW STEP 4: LISTEN (CHEMICAL TUNE) -->
+        <div class="flow-screen" id="screen-tune">
+          <div class="tune-stage">
+            <div class="rainbow-waveform-wrap">
+              <div class="rainbow-glow"></div>
+              <div class="rainbow-axis"></div>
+              <div class="rainbow-bars" id="rainbowBars"></div>
+            </div>
+
+            <div class="tune-info">
+              <h2 class="tune-formula" id="tuneFormula">H₂O</h2>
+              <p class="tune-subtitle">Chemical Tune</p>
+              <p class="tune-caption" id="tuneCaption">
+                Mapped musical representation of hydrogen-oxygen reference intervals and measured resonance.
+              </p>
+            </div>
+
+            <button id="playPauseTuneBtn" class="tune-play-circle" type="button" aria-label="Play or Pause Chemical Tune">
+              <span id="playPauseGlyph">▶</span>
+            </button>
+            <span class="tune-play-label" id="playPauseLabel">Play</span>
+
+            <div class="tune-scrubber-wrap">
+              <input type="range" id="tuneScrubber" min="0" max="100" value="0" aria-label="Chemical Tune progress" />
+              <div class="tune-times">
+                <span id="tuneElapsed">0:00</span>
+                <span id="tuneTotal">0:06</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: HISTORY -->
+      <section class="tab-panel" id="tab-history">
+        <header class="simple-page-header">
+          <h2>History</h2>
+          <button id="clearHistoryBtn" class="text-danger-btn hidden" type="button">Clear</button>
+        </header>
+        <div class="page-scroll" id="historyListContainer"></div>
+      </section>
+
+      <!-- TAB 3: LEARN -->
+      <section class="tab-panel" id="tab-learn">
+        <header class="simple-page-header">
+          <h2>Learn</h2>
+        </header>
+        <div class="page-scroll learn-cards">
+          <p class="learn-lead"><strong>See the liquid. Hear the science.</strong> Liquid Analyzer explores how liquids respond to calibrated sound waves.</p>
+
+          <div class="learn-card">
+            <div class="learn-icon blue">📷</div>
+            <div>
+              <h3>1. Camera + Sound</h3>
+              <p>Your camera frames the container for visual context. The measurement itself comes from calibrated sound waves emitted by your speaker and recorded by your microphone—the camera image never determines composition.</p>
+            </div>
+          </div>
+
+          <div class="learn-card">
+            <div class="learn-icon green">🧪</div>
+            <div>
+              <h3>2. Experimental Reference Matching</h3>
+              <p>Liquid Analyzer extracts resonance and decay features from the recorded echo and estimates whether they resemble a characterized reference liquid profile.</p>
+            </div>
+          </div>
+
+          <div class="learn-card">
+            <div class="learn-icon orange">📊</div>
+            <div>
+              <h3>3. Reference Composition</h3>
+              <p>When a scan matches a reference profile, the Composition card shows that profile's known constituents. Outputs are experimental estimates for research and education—never a purity, potability, or safety test.</p>
+            </div>
+          </div>
+
+          <div class="learn-card">
+            <div class="learn-icon purple">♫</div>
+            <div>
+              <h3>4. Chemical Tune</h3>
+              <p>Chemical Tune converts mapped reference constituents and measured acoustic resonances into musical intervals and timbres through a defined audio mapping.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: MORE -->
+      <section class="tab-panel" id="tab-more">
+        <header class="simple-page-header">
+          <h2>More</h2>
+        </header>
+        <div class="page-scroll more-list">
+          <div class="settings-group">
+            <h3>Experience</h3>
+            <label class="toggle-row">
+              <span>Auto-Play Chemical Tune on Open</span>
+              <input type="checkbox" id="autoPlayTuneToggle" checked />
+            </label>
+            <label class="toggle-row">
+              <span>Audible Acoustic Sweep During Scan</span>
+              <input type="checkbox" id="audibleSweepToggle" checked />
+            </label>
+          </div>
+
+          <div class="settings-group">
+            <h3>For Research &amp; Education</h3>
+            <p class="more-note">
+              Liquid Analyzer is an experimental acoustic liquid-analysis platform. Results express empirical similarity to calibrated reference profiles and must not be used to determine drinkability, chemical purity, toxicity, or safety.
+            </p>
+          </div>
+
+          <div class="settings-group">
+            <h3>Advanced</h3>
+            <button id="openResearchGateBtn" class="research-mode-btn" type="button">
+              <span>🔬 Research &amp; Developer Mode</span>
+              <span>›</span>
+            </button>
+          </div>
+
+          <div class="settings-group">
+            <h3>About</h3>
+            <div class="kv-row"><span>Application</span><strong>Liquid Analyzer</strong></div>
+            <div class="kv-row"><span>Version</span><strong>0.3.0 (Build 5)</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PRIMARY 4-TAB CONSUMER NAVIGATION BAR -->
+      <nav class="consumer-tabbar" aria-label="Primary navigation">
+        <button class="tab-btn active" data-tab="scan" type="button">
+          <span class="tab-ico">📷</span>
+          <span>Scan</span>
+        </button>
+        <button class="tab-btn" data-tab="history" type="button">
+          <span class="tab-ico">🕒</span>
+          <span>History</span>
+        </button>
+        <button class="tab-btn" data-tab="learn" type="button">
+          <span class="tab-ico">📖</span>
+          <span>Learn</span>
+        </button>
+        <button class="tab-btn" data-tab="more" type="button">
+          <span class="tab-ico">•••</span>
+          <span>More</span>
+        </button>
+      </nav>
+
+      <!-- Protected Research / Developer Mode Confirmation & Console Modal -->
+      <div class="modal-backdrop hidden" id="researchConfirmModal" role="dialog" aria-modal="true">
+        <div class="modal-sheet">
+          <h3>Open Research &amp; Developer Mode?</h3>
+          <p>Research Mode exposes controlled bench calibration, fixture metadata, signal-quality diagnostics, and CSRD-P1 session bundle export intended for laboratory validation studies.</p>
+          <div class="modal-actions">
+            <button id="confirmResearchOpenBtn" class="modal-primary-btn" type="button">Open Research Console</button>
+            <button id="cancelResearchOpenBtn" class="modal-cancel-btn" type="button">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="research-console hidden" id="researchConsoleModal" role="dialog" aria-modal="true">
+        <header class="research-header">
+          <span>🔬 Research &amp; Bench Mode</span>
+          <button id="exitResearchConsoleBtn" class="exit-research-btn" type="button">Exit</button>
+        </header>
+        <div class="research-body">
+          <div class="kv-card">
+            <h4>Layer 2 Research Engine Status</h4>
+            <div class="kv-row"><span>Protocol</span><code>CS-SPEC-P1-v1.2</code></div>
+            <div class="kv-row"><span>Stimulus Asset</span><code>SIG_ESS_v1 (48 kHz Float32)</code></div>
+            <div class="kv-row"><span>Manifest SHA-256</span><code>VERIFIED (4/4 WAVs)</code></div>
+            <div class="kv-row"><span>Cooldown Invariant</span><code>&gt;= 2.0 s Enforced</code></div>
+            <div class="kv-row"><span>Recorded Consumer Scans</span><code id="researchScanCount">0</code></div>
+          </div>
+          <button id="exportResearchJsonlBtn" class="modal-primary-btn" type="button">Download Session Audit JSON</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
