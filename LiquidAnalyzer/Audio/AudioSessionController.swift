@@ -9,12 +9,14 @@ public actor AudioSessionController {
     private let persistentDeviceCode: String
 
     public init() {
-        let key = "chemical_sound.research_device_code"
-        if let existing = UserDefaults.standard.string(forKey: key) {
+        let primaryKey = "liquid_analyzer.research_device_code"
+        let legacyKey = "chemical_sound.research_device_code"
+        if let existing = UserDefaults.standard.string(forKey: primaryKey) ?? UserDefaults.standard.string(forKey: legacyKey) {
+            UserDefaults.standard.set(existing, forKey: primaryKey)
             self.persistentDeviceCode = existing
         } else {
             let generated = "IOS_DEV_" + UUID().uuidString.prefix(8).uppercased()
-            UserDefaults.standard.set(generated, forKey: key)
+            UserDefaults.standard.set(generated, forKey: primaryKey)
             self.persistentDeviceCode = generated
         }
     }

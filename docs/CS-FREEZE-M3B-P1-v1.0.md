@@ -1,11 +1,12 @@
-# CHEMICAL SOUND
+# LIQUID ANALYZER
 
-## Milestone 3B Pre-Bench Freeze Note
+## Milestone 3B Pre-Bench Freeze Note (Refreshed for v0.2.0 / Build 4)
 
-- **Freeze ID:** `CS-FREEZE-M3B-P1-v1.0`
+- **Freeze ID:** `CS-FREEZE-M3B-P1-v1.1` *(supersedes `CS-FREEZE-M3B-P1-v1.0` prior to physical M3B execution)*
+- **Application Name:** `Liquid Analyzer` *(renamed from `Chemical Sound`; bundle ID `org.chemicalsound.acquisition` retained for App Store Connect continuity)*
 - **Hardware Domain:** `IPHONE_NATIVE`
 
-Chemical Sound has reached the Milestone 3B pre-bench freeze point.
+Liquid Analyzer has reached the refreshed Milestone 3B pre-bench freeze point.
 
 The software acquisition, auditing, provenance, reporting, and decision-control architecture is considered development-complete for purposes of beginning the designated baseline-iPhone physical validation experiment.
 
@@ -23,19 +24,19 @@ The software acquisition, auditing, provenance, reporting, and decision-control 
 
 ### Frozen Provenance & Configuration Digests
 
-- **Software Build Identity:** `chemical-sound==0.1.2` (`src-f4f936ab4542`)
-- **Package Source SHA-256:** `f4f936ab454281729951f4a18eb313ad24ae01df8723b18cd79bacef50853394`
-- **M3B Configuration / Threshold SHA-256 (`CS-ACC-M3B-P1-v1.0`):** `918f523f150981cacc9f6c402cdbdca3663704e54968a156322be839b02f2de8`
-- **Gate 0B Threshold & Frozen Classifier SHA-256 (`CS-SOP-M3B-P1-v1.1`):** `7e78adf1ce2ebd85ad485ef039bb44e7d5ef8f47b19c4baef52b19722d938c0f`
+- **Software Build Identity:** `liquid-analyzer==0.2.0` (`src-57ea10a8218b`, iOS `LiquidAnalyzer` v0.2.0 Build `4`)
+- **Package Source SHA-256:** `57ea10a8218b495bd0d0e1cce3cac5e6c702ace1087fb8f170c284994876ca57` *(prior `chemical-sound==0.1.2` digest: `f4f936ab454281729951f4a18eb313ad24ae01df8723b18cd79bacef50853394`)*
+- **M3B Configuration / Threshold SHA-256 (`CS-ACC-M3B-P1-v1.0`):** `918f523f150981cacc9f6c402cdbdca3663704e54968a156322be839b02f2de8` *(unchanged)*
+- **Gate 0B Threshold & Frozen Classifier SHA-256 (`CS-SOP-M3B-P1-v1.1`):** `7e78adf1ce2ebd85ad485ef039bb44e7d5ef8f47b19c4baef52b19722d938c0f` *(unchanged)*
 
 ---
 
 ### Reported Verification Checkpoint
 
-The project reports that `test_pipeline.py` completed all 11 controlled verification suites successfully:
+The project reports that `test_pipeline.py` completed all 11 controlled verification suites successfully on the renamed `LiquidAnalyzer` / `liquid_analyzer` codebase:
 
 - **Result:** **11/11 PASS**
-- **Reported runtime:** **14.88 s**
+- **Reported runtime:** **15.13 s**
 
 This freeze note records that result as the project's reported repository verification checkpoint.
 
@@ -107,6 +108,7 @@ shall be documented and versioned before the affected evidence is treated as con
 #### Post-Freeze Build Defect Log (Pre-Physical Run)
 - **`M3B-BF-01` (Swift 6 `@MainActor` Concurrency Compile Fix):** Replaced `inout` parameter across `async` boundary in `SampleSetupView.swift` / `AcquisitionCoordinator.acceptSampleAndRunSettling` with a value-returning `SampleMetadata` signature, and wrapped `UIDevice.current` telemetry reads inside `await MainActor.run` in `AudioSessionController.swift`. Zero impact on audio routing, timing, cooldown, QC thresholds, schema fields, DSP, or Gate 0B rules; Python `package_source_sha256` (`f4f936ab454281729951f4a18eb313ad24ae01df8723b18cd79bacef50853394`) and M3B/Gate 0B threshold digests remain unchanged.
 - **`M3B-BF-03` (Real-Device `iPhone15,3` `AVAudioSession` `OSStatus -50` Activation Ordering Fix, Build `3`):** Empirical testing on physical baseline `iPhone15,3` (`IOS_DEV_21F03054`, Build `2`) exposed `NSOSStatusErrorDomain Code=-50` (`paramErr`) when calling `setPreferredInputNumberOfChannels(1)` / `.defaultToSpeaker` prior to `AVAudioSession.setActive(true)` in `.measurement` mode. Reordered `AudioSessionController.configure` to activate `.playAndRecord` / `.measurement` first (falling back cleanly if `.defaultToSpeaker` is rejected pre-activation and applying `overrideOutputAudioPort(.speaker)` + preferred input/output channel preferences post-activation), while preserving strict post-activation verification in `AudioRouteValidator`.
+- **`M3B-RN-04` (Pre-Bench Application, Swift Target & Python Package Rename to `Liquid Analyzer`, v0.2.0 / Build `4`):** Renamed Swift target/module (`ChemicalSound` -> `LiquidAnalyzer`, `ChemicalSoundTests` -> `LiquidAnalyzerTests`), app display name (`Liquid Analyzer`), and Python package/CLI (`chemical_sound` -> `liquid_analyzer`, `liquid-analyzer==0.2.0`) prior to physical M3B execution while retaining App Store Connect bundle identifier `org.chemicalsound.acquisition`. Zero impact on audio routing, timing, cooldown, QC thresholds, 81-field `CSRD-P1` schema, DSP, or Gate 0B decision criteria; M3B (`918f523f...`) and Gate 0B (`7e78adf1...`) threshold digests remain identical, and `package_source_sha256` is refreshed to `57ea10a8218b495bd0d0e1cce3cac5e6c702ace1087fb8f170c284994876ca57`.
 
 ---
 
@@ -114,7 +116,7 @@ shall be documented and versioned before the affected evidence is treated as con
 
 The next controlled empirical artifact is: **`CSRD_P1_SESS_001`** generated from the designated physical baseline iPhone under `CS-OPS-M3B-P1-v1.0`.
 
-Upon export, the real-device bundle shall undergo the controlled M3B audit and audio-summary workflow (`m3b run-all`).
+Upon export, the real-device bundle shall undergo the controlled M3B audit and audio-summary workflow (`python -m liquid_analyzer.cli m3b run-all`).
 
 The resulting evidence shall support exactly one M3B disposition:
 - **`M3B PASS`**
@@ -131,7 +133,7 @@ Milestone 3B remains an **instrument-validation milestone**.
 
 A successful physical M3B result will establish that the designated iPhone/software configuration is sufficiently operationally characterized to proceed with fixture experiments.
 
-It will **not** establish that Chemical Sound distinguishes Water from Oil, identifies liquids, estimates concentration, or demonstrates the proposed liquid-dependent acoustic phenomenon.
+It will **not** establish that Liquid Analyzer distinguishes Water from Oil, identifies liquids, estimates concentration, or demonstrates the proposed liquid-dependent acoustic phenomenon.
 
 The governing progression remains:
 

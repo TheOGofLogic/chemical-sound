@@ -12,7 +12,7 @@ public actor AcquisitionStore {
         } else {
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
                 ?? FileManager.default.temporaryDirectory
-            self.rootDirectoryURL = docs.appendingPathComponent("ChemicalSoundSessions", isDirectory: true)
+            self.rootDirectoryURL = docs.appendingPathComponent("LiquidAnalyzerSessions", isDirectory: true)
         }
     }
 

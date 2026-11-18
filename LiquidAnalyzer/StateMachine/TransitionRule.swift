@@ -23,7 +23,7 @@ public struct TransitionOutcome: Sendable, Equatable {
     }
 }
 
-/// Pure, unit-testable transition table for the 22-state Chemical Sound acquisition machine.
+/// Pure, unit-testable transition table for the 22-state Liquid Analyzer acquisition machine.
 public enum TransitionRule {
     public static func evaluate(
         from current: AcquisitionState,

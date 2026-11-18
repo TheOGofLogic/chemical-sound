@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
 
-from chemical_sound.classification import (
+from liquid_analyzer.classification import (
     INVALID_MEASUREMENT_LABEL,
     NO_VALIDATED_MATCH_LABEL,
     REFERENCE_MATCH_STATUS,
@@ -26,8 +26,8 @@ from chemical_sound.classification import (
     run_nested_lobo_cv,
     verify_disjoint_sample_and_batch_splits,
 )
-from chemical_sound.cli import evaluate_csrd_directory
-from chemical_sound.dsp import (
+from liquid_analyzer.cli import evaluate_csrd_directory
+from liquid_analyzer.dsp import (
     DSPConfig,
     analyze_stepped_tones,
     deconvolve_ess_recording,
@@ -37,13 +37,13 @@ from chemical_sound.dsp import (
     extract_scan_features,
     get_primary_feature_registry,
 )
-from chemical_sound.ingestion_alignment import (
+from liquid_analyzer.ingestion_alignment import (
     align_recording_to_reference,
     apply_fractional_shift,
     ingest_audio_file,
 )
-from chemical_sound.reporting import process_and_save_recording_bundle
-from chemical_sound.schema_qc import (
+from liquid_analyzer.reporting import process_and_save_recording_bundle
+from liquid_analyzer.schema_qc import (
     QCThresholds,
     ScanRecord,
     detect_intra_batch_outliers,
@@ -52,7 +52,7 @@ from chemical_sound.schema_qc import (
     resolve_session_scan_validity,
     write_scans_jsonl,
 )
-from chemical_sound.synthetic import (
+from liquid_analyzer.synthetic import (
     LIQUID_PROFILES,
     build_container_liquid_ir,
     simulate_path_isolation_suite,
@@ -60,7 +60,7 @@ from chemical_sound.synthetic import (
     simulate_staged_dataset,
     simulate_stepped_tone_response,
 )
-from chemical_sound.waveforms import (
+from liquid_analyzer.waveforms import (
     PILOT_SWEEP_PRESETS,
     ESSConfig,
     SteppedToneConfig,
@@ -477,14 +477,14 @@ class TestV12PipelineRequirements(unittest.TestCase):
         from dataclasses import fields
         import json
         import re
-        from chemical_sound.schema_qc import ALL_QC_FLAGS
-        from chemical_sound.waveforms import sha256_file
+        from liquid_analyzer.schema_qc import ALL_QC_FLAGS
+        from liquid_analyzer.waveforms import sha256_file
 
         repo_root = Path(__file__).resolve().parents[1]
 
         # 1. Verify exact 1-to-1 snake_case field parity between Swift AcquisitionRecord and Python ScanRecord
         swift_rec_text = (
-            repo_root / "ChemicalSound" / "Domain" / "AcquisitionRecord.swift"
+            repo_root / "LiquidAnalyzer" / "Domain" / "AcquisitionRecord.swift"
         ).read_text(encoding="utf-8")
         swift_keys = set(re.findall(r'case\s+\w+\s*=\s*"([^"]+)"', swift_rec_text))
         python_keys = {f.name for f in fields(ScanRecord)}
@@ -492,14 +492,14 @@ class TestV12PipelineRequirements(unittest.TestCase):
 
         # 2. Verify all 22 canonical states in AcquisitionState.swift
         swift_state_text = (
-            repo_root / "ChemicalSound" / "Domain" / "AcquisitionState.swift"
+            repo_root / "LiquidAnalyzer" / "Domain" / "AcquisitionState.swift"
         ).read_text(encoding="utf-8")
         state_cases = re.findall(r"^\s*case\s+(\w+)\s*$", swift_state_text, flags=re.MULTILINE)
         self.assertEqual(len(state_cases), 22)
 
         # 3. Verify all Python QC flags exist in Swift QualityFlag.swift
         swift_flag_text = (
-            repo_root / "ChemicalSound" / "Domain" / "QualityFlag.swift"
+            repo_root / "LiquidAnalyzer" / "Domain" / "QualityFlag.swift"
         ).read_text(encoding="utf-8")
         swift_flags = set(re.findall(r'case\s+\w+\s*=\s*"([^"]+)"', swift_flag_text))
         self.assertTrue(ALL_QC_FLAGS.issubset(swift_flags))
@@ -518,8 +518,8 @@ class TestV12PipelineRequirements(unittest.TestCase):
             self.assertEqual(sha256_file(wav_file), digest)
 
     def test_09_m3b_bundle_auditor_all_ten_tests(self) -> None:
-        from chemical_sound.m3b_auditor import audit_m3b_bundle, detect_narrowband_interference
-        from chemical_sound.waveforms import export_swift_assets_bundle, sha256_file
+        from liquid_analyzer.m3b_auditor import audit_m3b_bundle, detect_narrowband_interference
+        from liquid_analyzer.waveforms import export_swift_assets_bundle, sha256_file
 
         # Verify narrowband 60 Hz hum detector
         t = np.arange(24_000, dtype=np.float64) / 48_000.0
@@ -687,7 +687,7 @@ class TestV12PipelineRequirements(unittest.TestCase):
             self.assertTrue((out_dir / "m3b_checklist.md").is_file())
 
             # Verify m3b summarize-audio (Metrics + plots manifest)
-            from chemical_sound.m3b_auditor import run_m3b_complete_verification, summarize_m3b_audio
+            from liquid_analyzer.m3b_auditor import run_m3b_complete_verification, summarize_m3b_audio
 
             audio_sum = summarize_m3b_audio(bdir, output_report_dir=out_dir)
             self.assertEqual(audio_sum["sop_id"], "CS-SOP-M3B-P1-v1.1")
@@ -759,7 +759,7 @@ class TestV12PipelineRequirements(unittest.TestCase):
 
     def test_10_gate0b_preregistered_decision_engine_and_metadata_nuisance(self) -> None:
         from dataclasses import replace
-        from chemical_sound.gate0b_decision import (
+        from liquid_analyzer.gate0b_decision import (
             SampleOperationalMetadata,
             evaluate_gate0b_decision,
             evaluate_gate0b_metrics,
@@ -869,7 +869,7 @@ class TestV12PipelineRequirements(unittest.TestCase):
         from contextlib import redirect_stdout
         import io
         import json
-        from chemical_sound.cli import main
+        from liquid_analyzer.cli import main
 
         ess = generate_ess_pair(ESSConfig())
         rng = np.random.default_rng(777)

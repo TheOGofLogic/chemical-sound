@@ -1,4 +1,4 @@
-"""Command-line interface for the Chemical Sound Phase 1 (v1.2 / CS-SOP-M3B-P1-v1.1) reference pipeline.
+"""Command-line interface for the Liquid Analyzer Phase 1 (v1.2 / CS-SOP-M3B-P1-v1.1) reference pipeline.
 
 Provides the controlled Appendix A.3 nested CLI surface:
 - `m3b audit-bundle`
@@ -626,8 +626,8 @@ def _cmd_gate0b_decide(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="chemical-sound",
-        description="Chemical Sound Phase 1 (v1.2 / CS-SOP-M3B-P1-v1.1) Controlled CLI",
+        prog="liquid-analyzer",
+        description="Liquid Analyzer Phase 1 (v1.2 / CS-SOP-M3B-P1-v1.1) Controlled CLI",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

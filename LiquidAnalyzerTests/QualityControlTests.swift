@@ -1,6 +1,6 @@
 import AVFAudio
 import XCTest
-@testable import ChemicalSound
+@testable import LiquidAnalyzer
 
 final class QualityControlTests: XCTestCase {
     private func writeTestWAV(

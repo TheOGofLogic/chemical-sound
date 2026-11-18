@@ -1,6 +1,6 @@
-# CHEMICAL SOUND: Phase 1 v1.2 Master Specification
+# LIQUID ANALYZER: Phase 1 v1.2 Master Specification
 
-**Document ID:** `CS-SPEC-P1-v1.2`  
+**Document ID:** `CS-SPEC-P1-v1.2` *(retained document identifier; application renamed from Chemical Sound to Liquid Analyzer)*  
 **Supersedes:** `CS-SPEC-P1-v1.1`  
 **Document status:** Controlled development specification (Candidate for Freeze)  
 **System classification:** Experimental acoustic liquid-response measurement & reference-matching instrument  
@@ -14,7 +14,7 @@
 
 ## 1. Purpose & Governing Scientific Statement
 
-**Chemical Sound** is a controlled acoustic-response measurement instrument designed to test whether liquid samples in a standardized container produce repeatable, batch-generalizable vibro-acoustic signatures using an iPhone's built-in transducers.
+**Liquid Analyzer** is a controlled acoustic-response measurement instrument designed to test whether liquid samples in a standardized container produce repeatable, batch-generalizable vibro-acoustic signatures using an iPhone's built-in transducers.
 
 The instrument measures the **coupled physical system** comprising:
 1. The liquid bulk (density, sound speed, viscosity, meniscus wetting, dissolved gas).

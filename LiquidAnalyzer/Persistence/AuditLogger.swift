@@ -13,7 +13,7 @@ public final class AuditLogger: @unchecked Sendable {
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
                 ?? FileManager.default.temporaryDirectory
             self.logFileURL = docs
-                .appendingPathComponent("ChemicalSoundSessions", isDirectory: true)
+                .appendingPathComponent("LiquidAnalyzerSessions", isDirectory: true)
                 .appendingPathComponent("transitions.jsonl")
         }
 

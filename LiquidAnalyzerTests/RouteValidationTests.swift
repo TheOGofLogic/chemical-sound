@@ -1,5 +1,5 @@
 import XCTest
-@testable import ChemicalSound
+@testable import LiquidAnalyzer
 
 final class RouteValidationTests: XCTestCase {
     private func validProfile(

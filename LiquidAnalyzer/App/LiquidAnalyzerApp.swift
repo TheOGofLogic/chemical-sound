@@ -3,7 +3,7 @@ import SwiftUI
 #if canImport(UIKit)
 @main
 #endif
-public struct ChemicalSoundApp: App {
+public struct LiquidAnalyzerApp: App {
     @StateObject private var appCoordinator = AppCoordinator()
     @Environment(\.scenePhase) private var scenePhase
 

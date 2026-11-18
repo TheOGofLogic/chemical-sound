@@ -21,7 +21,7 @@ public final class AppCoordinator: ObservableObject {
 
     public init(acquisitionCoordinator: AcquisitionCoordinator? = nil) {
         let initialDraft = SampleMetadata(
-            studyID: "CS_M3B_BENCH",
+            studyID: "LA_M3B_BENCH",
             sessionID: "SESS_001",
             operatorID: "OP_01",
             sampleID: "SMP_0001"

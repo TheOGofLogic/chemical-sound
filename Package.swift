@@ -2,27 +2,27 @@
 import PackageDescription
 
 let package = Package(
-    name: "ChemicalSound",
+    name: "LiquidAnalyzer",
     platforms: [
         .iOS(.v17),
         .macOS(.v14)
     ],
     products: [
         .library(
-            name: "ChemicalSound",
-            targets: ["ChemicalSound"]
+            name: "LiquidAnalyzer",
+            targets: ["LiquidAnalyzer"]
         )
     ],
     targets: [
         .target(
-            name: "ChemicalSound",
-            path: "ChemicalSound",
+            name: "LiquidAnalyzer",
+            path: "LiquidAnalyzer",
             exclude: ["Info.plist", "Assets.xcassets"]
         ),
         .testTarget(
-            name: "ChemicalSoundTests",
-            dependencies: ["ChemicalSound"],
-            path: "ChemicalSoundTests"
+            name: "LiquidAnalyzerTests",
+            dependencies: ["LiquidAnalyzer"],
+            path: "LiquidAnalyzerTests"
         )
     ]
 )

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Canonical 22-state acquisition machine for Chemical Sound Milestone 3A (CS-SPEC-P1-v1.2).
+/// Canonical 22-state acquisition machine for Liquid Analyzer Milestone 3A (CS-SPEC-P1-v1.2).
 public enum AcquisitionState: String, Codable, CaseIterable, Sendable {
     case unconfigured
     case configuring

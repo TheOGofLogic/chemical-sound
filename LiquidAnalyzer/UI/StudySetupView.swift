@@ -15,7 +15,7 @@ public struct StudySetupView: View {
         NavigationStack {
             Form {
                 Section("Research Disclaimer") {
-                    Text("Experimental acoustic acquisition instrument only (CS-SPEC-P1-v1.2). Does not perform chemical identification or safety assessment.")
+                    Text("Liquid Analyzer is an experimental acoustic response measurement instrument (CS-SPEC-P1-v1.2). It does not determine molecular composition, purity, potability, toxicity, or safety.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

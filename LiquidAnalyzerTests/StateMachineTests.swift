@@ -1,5 +1,5 @@
 import XCTest
-@testable import ChemicalSound
+@testable import LiquidAnalyzer
 
 @MainActor
 final class StateMachineTests: XCTestCase {

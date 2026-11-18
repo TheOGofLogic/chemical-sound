@@ -1,4 +1,4 @@
-name: macOS Swift XCTest & Unsigned iOS IPA Build (No-Mac Windows Workflow)
+name: macOS Swift XCTest & Unsigned iOS IPA Build (Liquid Analyzer)
 
 on:
   push:
@@ -23,14 +23,10 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Verify handoff archive SHA-256 & run controlled swift test suite
+      - name: Run controlled swift test suite
         run: |
           set -euo pipefail
-          cp dist/ChemicalSound_M3B_Mac_Handoff_v1.0.zip ./ChemicalSound_M3B_Mac_Handoff_v1.0.zip
-          shasum -a 256 ChemicalSound_M3B_Mac_Handoff_v1.0.zip | tee ChemicalSound_M3B_Mac_Handoff_v1.0.sha256.txt
-          unzip -q ChemicalSound_M3B_Mac_Handoff_v1.0.zip
-          cd ChemicalSound_M3B_Mac_Handoff_v1.0
-          swift test 2>&1 | tee ../swift_test_output.txt
+          swift test 2>&1 | tee swift_test_output.txt
 
       - name: Generate Xcode project & build unsigned iOS IPA for Windows Sideloading
         run: |
@@ -40,29 +36,28 @@ jobs:
           fi
           xcodegen generate
           xcodebuild \
-            -project ChemicalSound.xcodeproj \
-            -scheme ChemicalSound \
+            -project LiquidAnalyzer.xcodeproj \
+            -scheme LiquidAnalyzer \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_IDENTITY="" \
             AD_HOC_CODE_SIGNING_ALLOWED=NO \
             clean build
 
           mkdir -p build/ipa_stage/Payload
-          cp -R build/DerivedData/Build/Products/Release-iphoneos/ChemicalSound.app build/ipa_stage/Payload/
-          (cd build/ipa_stage && zip -qry ../../ChemicalSound_M3B_v1.0.ipa Payload)
-          shasum -a 256 ChemicalSound_M3B_v1.0.ipa | tee ChemicalSound_M3B_v1.0.ipa.sha256.txt
+          cp -R build/DerivedData/Build/Products/Release-iphoneos/LiquidAnalyzer.app build/ipa_stage/Payload/
+          (cd build/ipa_stage && zip -qry ../../LiquidAnalyzer_M3B_v0.2.0.ipa Payload)
+          shasum -a 256 LiquidAnalyzer_M3B_v0.2.0.ipa | tee LiquidAnalyzer_M3B_v0.2.0.ipa.sha256.txt
 
       - name: Upload macOS XCTest output & installable iOS IPA
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ChemicalSound-M3B-macOS-Evidence-and-IPA-${{ matrix.os }}
+          name: LiquidAnalyzer-M3B-macOS-Evidence-and-IPA-${{ matrix.os }}
           path: |
-            ChemicalSound_M3B_Mac_Handoff_v1.0.sha256.txt
             swift_test_output.txt
-            ChemicalSound_M3B_v1.0.ipa
-            ChemicalSound_M3B_v1.0.ipa.sha256.txt
+            LiquidAnalyzer_M3B_v0.2.0.ipa
+            LiquidAnalyzer_M3B_v0.2.0.ipa.sha256.txt

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Wire-compatible CSRD-P1 v1.2 scan record matching Python `chemical_sound.schema_qc.ScanRecord`.
+/// Wire-compatible CSRD-P1 v1.2 scan record matching Python `liquid_analyzer.schema_qc.ScanRecord`.
 /// Encodes every `nil` optional field explicitly as JSON `null` (never imputed, never silently dropped).
 public struct AcquisitionRecord: Codable, Sendable, Equatable, Identifiable {
     public var id: String { "\(sampleID)_rep\(repetitionNumber)" }

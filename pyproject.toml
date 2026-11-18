@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "chemical-sound"
-version = "0.1.1"
-description = "Chemical Sound Phase 1 (v1.1) Reference Waveform, ESS Deconvolution, Acoustic Feature & Open-Set Classification Pipeline"
+name = "liquid-analyzer"
+version = "0.2.0"
+description = "Liquid Analyzer Phase 1 (v1.2) Reference Waveform, ESS Deconvolution, Acoustic Feature & Open-Set Reference-Matching Pipeline"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -22,7 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-chemical-sound = "chemical_sound.cli:main"
+liquid-analyzer = "liquid_analyzer.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

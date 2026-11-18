@@ -70,7 +70,7 @@ def compute_software_build_identity() -> dict[str, Any]:
     pkg_source_sha256 = compute_canonical_json_sha256(py_hashes)
     git_commit = _resolve_git_commit(pkg_dir)
     return {
-        "package_name": "chemical-sound",
+        "package_name": "liquid-analyzer",
         "package_version": __version__,
         "spec_version": SPEC_VERSION,
         "sop_version": SOP_M3B_VERSION,
@@ -369,7 +369,7 @@ def write_experiment_artifacts(
 
     # Human-readable Markdown summary report (Section 19.2)
     lines = [
-        f"# Chemical Sound Phase 1 Experiment Summary ({stage})",
+        f"# Liquid Analyzer Phase 1 Experiment Summary ({stage})",
         "",
         f"- **Specification:** `{SPEC_VERSION}`",
         f"- **Dataset Version:** `{DATASET_VERSION}`",

@@ -48,7 +48,7 @@ GATE0B_CLASSES: tuple[str, str] = ("H2O_DIST", "OIL_VEG")
 
 FINAL_CONTROL_STATEMENT = (
     "A failed Gate 0B does not establish that acoustic liquid discrimination is impossible. "
-    "It establishes only that the specified Chemical Sound instrument and experiment did not "
+    "It establishes only that the specified Liquid Analyzer instrument and experiment did not "
     "demonstrate the required phenomenon under these frozen criteria."
 )
 
@@ -899,7 +899,7 @@ def _write_gate0b_outputs(out_dir: Path, report: dict[str, Any]) -> None:
     )
     b_id = report["software_build_identity"]
     lines = [
-        f"# Chemical Sound — Gate 0B Pre-Registered Decision Report (`{SOP_M3B_VERSION}`)",
+        f"# Liquid Analyzer — Gate 0B Pre-Registered Decision Report (`{SOP_M3B_VERSION}`)",
         "",
         f"- **Formal Disposition:** **`{report['disposition']}`**",
         f"- **Software Build Identity:** `{b_id['package_name']}=={b_id['package_version']}` (`{b_id['build_id']}`)",
