@@ -290,7 +290,7 @@ public struct ConsumerMoreView: View {
 
                 Section("About") {
                     LabeledContent("Application", value: "Liquid Analyzer")
-                    LabeledContent("Version", value: "0.3.0 (Build 5)")
+                    LabeledContent("Version", value: "0.3.1 (Build 6)")
                 }
             }
             .navigationTitle("More")

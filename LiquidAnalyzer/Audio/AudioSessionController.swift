@@ -122,6 +122,55 @@ public actor AudioSessionController {
         #endif
     }
 
+    /// Resilient consumer-mode audio configuration using built-in speaker + mic at native sample rate.
+    public func configureForConsumerScan() async throws -> (sampleRateHz: Double, outputVolume: Float) {
+        let granted = await requestMicrophonePermission()
+        guard granted else {
+            throw AcquisitionFailure.microphonePermissionDenied
+        }
+
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+
+        do {
+            do {
+                try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            } catch {
+                try session.setCategory(.playAndRecord, mode: .default, options: [])
+            }
+            try? session.setPreferredSampleRate(48_000.0)
+            try? session.setPreferredIOBufferDuration(0.010)
+            try session.setActive(true)
+        } catch {
+            throw AcquisitionFailure.audioEngineFailure("Unable to activate audio session: \(error)")
+        }
+
+        // Reject external headphones/Bluetooth so speaker-to-mic acoustic sweep uses built-in transducers
+        let route = session.currentRoute
+        let portNamesAndTypes = route.outputs.map { $0.portType.rawValue + " " + $0.portName }
+            + route.inputs.map { $0.portType.rawValue + " " + $0.portName }
+        for portDesc in portNamesAndTypes {
+            let lower = portDesc.lowercased()
+            if AudioRouteValidator.prohibitedPortSubstrings.contains(where: { lower.contains($0) }) {
+                throw AcquisitionFailure.externalAudioRoute(portDesc)
+            }
+        }
+
+        try? session.overrideOutputAudioPort(.speaker)
+        if let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+            try? session.setPreferredInput(builtInMic)
+        }
+
+        // Allow CoreAudio route & sample-rate negotiation to settle before creating AVAudioEngine
+        try? await Task.sleep(for: .milliseconds(60))
+
+        let rate = session.sampleRate > 0 ? session.sampleRate : 48_000.0
+        return (rate, session.outputVolume)
+        #else
+        return (48_000.0, 0.65)
+        #endif
+    }
+
     public func deactivate() throws {
         #if os(iOS)
         try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)

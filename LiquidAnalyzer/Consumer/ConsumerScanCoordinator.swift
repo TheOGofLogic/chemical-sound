@@ -44,7 +44,6 @@ public final class ConsumerHistoryStore: @unchecked Sendable {
 }
 
 /// Orchestrates the consumer AIM -> SCAN -> RESULT -> LISTEN experience on top of the Layer 2 Research Engine.
-/// All calibration/route/waveform/QC steps happen automatically in the background without exposing lab jargon.
 @MainActor
 public final class ConsumerScanCoordinator: ObservableObject {
     @Published public var selectedTab: ConsumerTab = .scan
@@ -52,18 +51,17 @@ public final class ConsumerScanCoordinator: ObservableObject {
     @Published public private(set) var scanProgress: Double = 0.0
     @Published public var consumerAlertMessage: String?
     @Published public private(set) var history: [ConsumerScanItem] = []
-    @Published public var autoPlayTunePreview: Bool = false
+    @Published public var autoPlayTunePreview: Bool = true
     @Published public var hapticsEnabled: Bool = true
     @Published public var isResearchConsolePresented: Bool = false
 
+    public private(set) var isConfiguringSession: Bool = false
     public let cameraService: CameraTargetingService
     public let tunePlayer: ChemicalTunePlayer
 
-    // Underlying Layer 2 Research Engine services
     private let researchCoordinator: AcquisitionCoordinator
     private let classifier: OnDeviceAcousticClassifier
     private let historyStore: ConsumerHistoryStore
-    private let routeValidator = AudioRouteValidator()
     private var activeScanTask: Task<Void, Never>?
     private var consumerScanCounter: Int = 0
 
@@ -87,17 +85,23 @@ public final class ConsumerScanCoordinator: ObservableObject {
         guard activeScanTask == nil else { return }
         tunePlayer.stop()
         consumerAlertMessage = nil
-        scanProgress = 0.06
+
+        // Grab latest silent preview thumbnail synchronously BEFORE transitioning away from AIM
+        let thumbnailData = cameraService.latestTargetingThumbnail()
+        cameraService.stopCamera()
+
+        scanProgress = 0.08
         flowStep = .scanning
 
         activeScanTask = Task { [weak self] in
             guard let self else { return }
-            await self.runAutomatedConsumerScan()
+            await self.runAutomatedConsumerScan(thumbnailData: thumbnailData)
             self.activeScanTask = nil
         }
     }
 
     public func cancelActiveScan() {
+        guard !isConfiguringSession else { return }
         activeScanTask?.cancel()
         activeScanTask = nil
         Task {
@@ -127,12 +131,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
 
     // MARK: - Automated Layer 2 Research Sequence
 
-    private func runAutomatedConsumerScan() async {
-        // 1. Capture visual context thumbnail from camera if available (targeting context only)
-        let thumbnailData = await cameraService.captureTargetingThumbnail()
-        if Task.isCancelled { return }
-        scanProgress = 0.16
-
+    private func runAutomatedConsumerScan(thumbnailData: Data?) async {
         let protocolConfig = researchCoordinator.protocolConfiguration
         let waveformRepo = researchCoordinator.waveformRepository
         let audioSession = researchCoordinator.audioSession
@@ -141,36 +140,39 @@ public final class ConsumerScanCoordinator: ObservableObject {
         let store = researchCoordinator.store
 
         do {
-            // 2. Verify storage & SHA-256 waveform integrity silently
+            // 1. Verify storage & SHA-256 waveform integrity silently
             try await store.verifySufficientStorage()
             try waveformRepo.verifyAllAssets()
             if Task.isCancelled { return }
-            scanProgress = 0.28
+            scanProgress = 0.22
 
-            // 3. Configure native iPhone built-in speaker & microphone measurement session
-            let preProfile = try await audioSession.configure(protocol: protocolConfig)
-            try routeValidator.validateConfiguration(
-                profile: preProfile,
-                protocolConfiguration: protocolConfig
-            )
+            // 2. Configure built-in speaker + microphone session (guarded against programmatic route notifications)
+            isConfiguringSession = true
+            let sessionInfo: (sampleRateHz: Double, outputVolume: Float)
+            do {
+                sessionInfo = try await audioSession.configureForConsumerScan()
+                isConfiguringSession = false
+            } catch {
+                isConfiguringSession = false
+                throw error
+            }
 
-            // Friendly check if phone hardware volume is muted
-            if preProfile.outputVolume < 0.08 {
+            if sessionInfo.outputVolume < 0.03 {
                 flowStep = .aim
                 scanProgress = 0.0
-                consumerAlertMessage = "Please turn up your iPhone volume slightly so Liquid Analyzer can play its acoustic test sound."
+                consumerAlertMessage = "Your iPhone volume is muted. Please press the Volume Up button slightly so Liquid Analyzer can play its acoustic test sound."
                 return
             }
 
-            // 4. Honor thermal/acoustic inter-scan cooldown automatically if user rescans immediately
+            // 3. Honor thermal/acoustic inter-scan cooldown automatically if user rescans right away
             let remainingCooldownMs = timing.remainingCooldownMilliseconds
             if remainingCooldownMs > 0 {
-                try await timing.sleepMilliseconds(remainingCooldownMs)
+                try await timing.sleepMilliseconds(min(remainingCooldownMs, 1_500))
             }
             if Task.isCancelled { return }
-            scanProgress = 0.42
+            scanProgress = 0.38
 
-            // 5. Emit calibrated ESS sweep (`SIG_ESS_v1`) and record 48 kHz Float32 response
+            // 4. Emit calibrated ESS sweep (`SIG_ESS_v1`) and record mono Float32 response
             consumerScanCounter += 1
             let sessionID = "CONSUMER_SESS"
             let sampleID = String(format: "SCAN_%04d", consumerScanCounter + history.count)
@@ -184,10 +186,11 @@ public final class ConsumerScanCoordinator: ObservableObject {
             let waveformFile = try waveformRepo.audioFile(assetID: "SIG_ESS_v1")
             let inverseURL = try? waveformRepo.assetURL(assetID: "SIG_ESS_v1_inverse")
 
-            try await audioEngine.prepare(
+            let actualRate = try await audioEngine.prepare(
                 waveform: waveformFile,
                 destinationURL: tempURL,
-                expectedSampleRateHz: protocolConfig.requestedSampleRateHz
+                expectedSampleRateHz: sessionInfo.sampleRateHz,
+                enforceExactSampleRate: false
             )
             try await audioEngine.start()
 
@@ -196,15 +199,14 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 await audioEngine.abortImmediately()
                 return
             }
-            scanProgress = 0.58
+            scanProgress = 0.56
 
             let playTimes = await audioEngine.playExcitation(waveform: waveformFile)
-            scanProgress = 0.76
+            scanProgress = 0.78
 
             try await timing.sleepMilliseconds(protocolConfig.postRollMs)
             _ = try await audioEngine.stopAndFinalizeRecording()
 
-            // Record excitation timestamp so back-to-back scans respect the 2.0 s hardware cooldown
             Task {
                 try? await timing.runCooldown(
                     fromExcitationEndUptime: playTimes.endUptimeSeconds,
@@ -219,26 +221,25 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 repetition: 1
             )
             if Task.isCancelled { return }
-            scanProgress = 0.90
+            scanProgress = 0.92
 
-            // 6. Deconvolve, verify signal quality, and run experimental reference classification
-            let preRollFrames = Int(round(Double(protocolConfig.preRollMs) * protocolConfig.requestedSampleRateHz / 1_000.0))
-            let activeFrames = assetMeta.numFrames ?? Int(round(Double(assetMeta.durationMs) * protocolConfig.requestedSampleRateHz / 1_000.0))
+            // 5. Deconvolve, verify signal quality, and run experimental reference classification
+            let preRollFrames = Int(round(Double(protocolConfig.preRollMs) * actualRate / 1_000.0))
+            let activeFrames = Int(round(Double(assetMeta.durationMs) * actualRate / 1_000.0))
 
             let resultItem = try classifier.analyzeAndClassify(
                 recordingURL: committed.finalURL,
-                inverseFilterURL: inverseURL,
+                inverseFilterURL: (abs(actualRate - 48_000.0) < 100.0) ? inverseURL : nil,
                 preRollFrames: preRollFrames,
                 activeFrames: activeFrames,
                 clippingCeilingDBFS: protocolConfig.clippingCeilingDBFS,
                 thumbnailJPEGData: thumbnailData
             )
 
-            try? await timing.sleepMilliseconds(180)
+            try? await timing.sleepMilliseconds(160)
             if Task.isCancelled { return }
             scanProgress = 1.0
 
-            // Save valid or unmatched scans to consumer history
             if resultItem.status != .unclearScan {
                 history.insert(resultItem, at: 0)
                 if history.count > 50 {
@@ -249,6 +250,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
 
             flowStep = .result(resultItem)
         } catch {
+            isConfiguringSession = false
             await audioEngine.abortImmediately()
             if Task.isCancelled { return }
             scanProgress = 0.0
@@ -259,17 +261,17 @@ public final class ConsumerScanCoordinator: ObservableObject {
 
     private func friendlyConsumerMessage(for error: Error) -> String {
         guard let failure = error as? AcquisitionFailure else {
-            return "Unable to complete the acoustic scan right now. Please hold your iPhone steady in a quiet area and try again."
+            return "Unable to complete the scan right now. Please hold your iPhone steady in a quiet spot and try again."
         }
         switch failure {
         case .microphonePermissionDenied:
-            return "Microphone access is turned off. Please enable Microphone access for Liquid Analyzer in Settings so it can hear acoustic reflections."
+            return "Microphone access is turned off. Please enable Microphone access for Liquid Analyzer in Settings so it can hear sound-wave reflections."
         case .externalAudioRoute, .unsupportedAudioRoute:
-            return "Headphones or a Bluetooth speaker are connected. Please disconnect external audio so Liquid Analyzer can use your iPhone's built-in speaker and microphone."
+            return "Headphones or Bluetooth audio are connected. Please disconnect external audio so Liquid Analyzer can use your iPhone's built-in speaker and microphone."
         case .insufficientStorage:
-            return "Your iPhone is low on storage space. Please free a small amount of space and try scanning again."
+            return "Your iPhone is low on storage space. Please free a small amount of space and try again."
         default:
-            return "Unable to capture a clean acoustic signal right now. Please disconnect any external audio accessories, check your volume, and try again."
+            return "Could not capture a clean sound reflection (\(failure.localizedDescription)). Please unplug any audio accessories, turn up media volume, and try again."
         }
     }
 }

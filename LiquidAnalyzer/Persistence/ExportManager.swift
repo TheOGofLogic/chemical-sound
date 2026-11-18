@@ -95,7 +95,7 @@ public struct ExportManager: Sendable {
             studyID: studyID,
             sessionID: sessionID,
             sessionValidityState: sessionValidityState,
-            appVersion: baselineProfile?.appVersion ?? "0.3.0",
+            appVersion: baselineProfile?.appVersion ?? "0.3.1",
             operatingSystemVersion: baselineProfile?.iosVersion ?? ProcessInfo.processInfo.operatingSystemVersionString,
             baselineRuntimeProfile: baselineProfile,
             totalRecordedScans: records.count,

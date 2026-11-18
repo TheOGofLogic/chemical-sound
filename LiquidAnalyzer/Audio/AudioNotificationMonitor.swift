@@ -21,7 +21,14 @@ public final class AudioNotificationMonitor {
                 forName: AVAudioSession.routeChangeNotification,
                 object: nil,
                 queue: .main
-            ) { [weak self] _ in
+            ) { [weak self] notification in
+                // Only treat physical device plug/unplug as an external route change;
+                // ignore programmatic .categoryChange, .override, and .routeConfigurationChange.
+                let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+                let reason = rawReason.flatMap { AVAudioSession.RouteChangeReason(rawValue: $0) }
+                guard reason == .newDeviceAvailable || reason == .oldDeviceUnavailable else {
+                    return
+                }
                 MainActor.assumeIsolated {
                     self?.onRouteChange?()
                 }

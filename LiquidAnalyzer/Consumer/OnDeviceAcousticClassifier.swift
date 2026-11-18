@@ -22,8 +22,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
 
     public init(
         referenceLibrary: [ReferenceLiquidProfile] = ReferenceLiquidProfile.provisionalLibrary,
-        distanceThreshold: Double = 2.85,
-        minimumSNRDB: Double = 8.0
+        distanceThreshold: Double = 3.10,
+        minimumSNRDB: Double = 1.8
     ) {
         self.referenceLibrary = referenceLibrary
         self.distanceThreshold = distanceThreshold
@@ -38,12 +38,12 @@ public struct OnDeviceAcousticClassifier: Sendable {
         clippingCeilingDBFS: Double = -0.5,
         thumbnailJPEGData: Data? = nil
     ) throws -> ConsumerScanItem {
-        let samples = try Self.readMonoFloatSamples(from: recordingURL)
-        let inverse = inverseFilterURL.flatMap { try? Self.readMonoFloatSamples(from: $0) }
+        let (samples, actualSR) = try Self.readMonoFloatSamplesAndRate(from: recordingURL)
+        let inverse = inverseFilterURL.flatMap { try? Self.readMonoFloatSamplesAndRate(from: $0).samples }
         return classifySamples(
             samples: samples,
             inverseFilter: inverse,
-            sampleRateHz: 48_000.0,
+            sampleRateHz: actualSR,
             preRollFrames: preRollFrames,
             activeFrames: activeFrames,
             clippingCeilingDBFS: clippingCeilingDBFS,
@@ -323,20 +323,21 @@ public struct OnDeviceAcousticClassifier: Sendable {
 
     // MARK: - Pure Swift Audio & FFT Utilities
 
-    private static func readMonoFloatSamples(from url: URL) throws -> [Float] {
+    private static func readMonoFloatSamplesAndRate(from url: URL) throws -> (samples: [Float], sampleRateHz: Double) {
         let file = try AVAudioFile(forReading: url)
+        let sr = file.processingFormat.sampleRate > 0 ? file.processingFormat.sampleRate : 48_000.0
         let count = Int(file.length)
         guard count > 0,
               let buf = AVAudioPCMBuffer(
                   pcmFormat: file.processingFormat,
                   frameCapacity: AVAudioFrameCount(count)
               ) else {
-            return []
+            return ([], sr)
         }
         try file.read(into: buf)
-        guard let ptr = buf.floatChannelData?[0] else { return [] }
+        guard let ptr = buf.floatChannelData?[0] else { return ([], sr) }
         let n = Int(buf.frameLength)
-        return Array(UnsafeBufferPointer(start: ptr, count: n))
+        return (Array(UnsafeBufferPointer(start: ptr, count: n)), sr)
     }
 
     private static func segmentRMS(_ samples: [Float], start: Int, end: Int) -> Double {

@@ -172,6 +172,7 @@ public final class ChemicalTunePlayer: NSObject, ObservableObject, AVAudioPlayer
         } else {
             #if os(iOS)
             let session = AVAudioSession.sharedInstance()
+            try? session.overrideOutputAudioPort(.none)
             try? session.setCategory(.playback, mode: .default, options: [])
             try? session.setActive(true)
             #endif

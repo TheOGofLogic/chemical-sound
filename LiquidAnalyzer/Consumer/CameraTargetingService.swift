@@ -4,6 +4,7 @@ import SwiftUI
 
 #if os(iOS)
 import AVFoundation
+import CoreImage
 import UIKit
 
 public final class CameraPreviewUIView: UIView {
@@ -15,14 +16,29 @@ public final class CameraPreviewUIView: UIView {
         // swiftlint:disable:next force_cast
         layer as! AVCaptureVideoPreviewLayer
     }
+
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        if let connection = videoPreviewLayer.connection {
+            if #available(iOS 17.0, *) {
+                if connection.isVideoRotationAngleSupported(90) {
+                    connection.videoRotationAngle = 90
+                }
+            }
+        }
+    }
 }
 
-private final class CameraSessionWorker: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
+private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     let session = AVCaptureSession()
-    private let photoOutput = AVCapturePhotoOutput()
-    private let queue = DispatchQueue(label: "org.liquidanalyzer.camera.session")
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let sessionQueue = DispatchQueue(label: "org.liquidanalyzer.camera.session")
+    private let sampleQueue = DispatchQueue(label: "org.liquidanalyzer.camera.frames")
+    private let ciContext = CIContext()
+    private let frameLock = NSLock()
+    private var cachedThumbnailJPEG: Data?
+    private var lastFrameCaptureUptime: TimeInterval = 0
     private var isConfigured = false
-    private var pendingPhotoContinuation: CheckedContinuation<Data?, Never>?
 
     func start(onStatusUpdate: @escaping @Sendable (Bool) -> Void) {
         let authStatus = AVCaptureDevice.authorizationStatus(for: .video)
@@ -43,17 +59,23 @@ private final class CameraSessionWorker: NSObject, AVCapturePhotoCaptureDelegate
     }
 
     private func configureAndRun(onStatusUpdate: @escaping @Sendable (Bool) -> Void) {
-        queue.async { [weak self] in
+        sessionQueue.async { [weak self] in
             guard let self else { return }
             if !self.isConfigured {
                 self.session.beginConfiguration()
-                self.session.sessionPreset = .photo
+                // Critical: prevent AVCaptureSession from touching or interrupting AVAudioSession!
+                self.session.automaticallyConfiguresApplicationAudioSession = false
+                self.session.sessionPreset = .high
+
                 if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
                    let input = try? AVCaptureDeviceInput(device: device),
                    self.session.canAddInput(input) {
                     self.session.addInput(input)
-                    if self.session.canAddOutput(self.photoOutput) {
-                        self.session.addOutput(self.photoOutput)
+
+                    self.videoOutput.alwaysDiscardsLateVideoFrames = true
+                    self.videoOutput.setSampleBufferDelegate(self, queue: self.sampleQueue)
+                    if self.session.canAddOutput(self.videoOutput) {
+                        self.session.addOutput(self.videoOutput)
                     }
                     self.isConfigured = true
                 }
@@ -72,60 +94,51 @@ private final class CameraSessionWorker: NSObject, AVCapturePhotoCaptureDelegate
     }
 
     func stop() {
-        queue.async { [weak self] in
+        sessionQueue.async { [weak self] in
             guard let self, self.session.isRunning else { return }
             self.session.stopRunning()
         }
     }
 
-    func captureSnapshot() async -> Data? {
-        await withCheckedContinuation { continuation in
-            queue.async { [weak self] in
-                guard let self, self.isConfigured, self.session.isRunning else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                if let previous = self.pendingPhotoContinuation {
-                    self.pendingPhotoContinuation = nil
-                    previous.resume(returning: nil)
-                }
-                self.pendingPhotoContinuation = continuation
-                let settings = AVCapturePhotoSettings()
-                self.photoOutput.capturePhoto(with: settings, delegate: self)
-            }
-        }
+    func latestThumbnailJPEG() -> Data? {
+        frameLock.lock()
+        defer { frameLock.unlock() }
+        return cachedThumbnailJPEG
     }
 
-    func photoOutput(
-        _ output: AVCapturePhotoOutput,
-        didFinishProcessingPhoto photo: AVCapturePhoto,
-        error: Error?
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
     ) {
-        let rawData = (error == nil) ? photo.fileDataRepresentation() : nil
-        let compressed: Data?
-        if let rawData, let image = UIImage(data: rawData) {
-            compressed = Self.downsampledJPEGData(from: image, maxDimension: 360)
-        } else {
-            compressed = nil
+        let now = ProcessInfo.processInfo.systemUptime
+        guard (now - lastFrameCaptureUptime) >= 0.45,
+              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return
         }
+        lastFrameCaptureUptime = now
 
-        queue.async { [weak self] in
-            guard let self, let cont = self.pendingPhotoContinuation else { return }
-            self.pendingPhotoContinuation = nil
-            cont.resume(returning: compressed)
-        }
-    }
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
+        let extent = ciImage.extent
+        guard extent.width > 0, extent.height > 0 else { return }
 
-    private static func downsampledJPEGData(from image: UIImage, maxDimension: CGFloat) -> Data? {
-        let size = image.size
-        guard size.width > 0, size.height > 0 else { return image.jpegData(compressionQuality: 0.72) }
-        let scale = min(1.0, maxDimension / max(size.width, size.height))
-        let targetSize = CGSize(width: round(size.width * scale), height: round(size.height * scale))
-        let renderer = UIGraphicsImageRenderer(size: targetSize)
-        let scaled = renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        let side = min(extent.width, extent.height)
+        let cropRect = CGRect(
+            x: extent.midX - side * 0.5,
+            y: extent.midY - side * 0.5,
+            width: side,
+            height: side
+        )
+        let scale = min(1.0, 320.0 / side)
+        let scaled = ciImage.cropped(to: cropRect).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let cgImg = ciContext.createCGImage(scaled, from: scaled.extent) else { return }
+
+        let jpeg = UIImage(cgImage: cgImg).jpegData(compressionQuality: 0.72)
+        if let jpeg {
+            frameLock.lock()
+            cachedThumbnailJPEG = jpeg
+            frameLock.unlock()
         }
-        return scaled.jpegData(compressionQuality: 0.75)
     }
 }
 
@@ -149,7 +162,7 @@ public struct LiveCameraPreviewRepresentable: UIViewRepresentable {
 #endif
 
 /// Manages camera preview for visual targeting on the AIM screen.
-/// Acoustic measurements—not the camera image—provide the analysis signal.
+/// Uses silent video-frame caching (zero shutter sound, zero blocking continuations) and never touches AVAudioSession.
 @MainActor
 public final class CameraTargetingService: ObservableObject {
     @Published public private(set) var isCameraLive: Bool = false
@@ -178,10 +191,10 @@ public final class CameraTargetingService: ObservableObject {
         #endif
     }
 
-    public func captureTargetingThumbnail() async -> Data? {
+    public func latestTargetingThumbnail() -> Data? {
         #if os(iOS)
         guard isCameraLive else { return nil }
-        return await worker.captureSnapshot()
+        return worker.latestThumbnailJPEG()
         #else
         return nil
         #endif
