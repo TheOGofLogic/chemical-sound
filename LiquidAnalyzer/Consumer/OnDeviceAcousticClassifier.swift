@@ -31,6 +31,14 @@ public struct OnDeviceAcousticClassifier: Sendable {
         activeFrames: Int = 9_600,
         clippingCeilingDBFS: Double = -0.5,
         scanSequenceNumber: Int? = nil,
+        batchRunID: String? = nil,
+        batchScanIndex: Int? = nil,
+        batchTotalCount: Int? = nil,
+        geometryCondition: String? = nil,
+        controlSeriesTag: String? = nil,
+        aeAfWbLockState: String? = nil,
+        targetLockState: String? = nil,
+        targetLockScore: Double? = nil,
         thumbnailJPEGData: Data? = nil,
         sceneContextJPEGData: Data? = nil,
         opticsLocked: Bool = false,
@@ -46,6 +54,14 @@ public struct OnDeviceAcousticClassifier: Sendable {
             activeFrames: activeFrames,
             clippingCeilingDBFS: clippingCeilingDBFS,
             scanSequenceNumber: scanSequenceNumber,
+            batchRunID: batchRunID,
+            batchScanIndex: batchScanIndex,
+            batchTotalCount: batchTotalCount,
+            geometryCondition: geometryCondition,
+            controlSeriesTag: controlSeriesTag,
+            aeAfWbLockState: aeAfWbLockState,
+            targetLockState: targetLockState,
+            targetLockScore: targetLockScore,
             thumbnailJPEGData: thumbnailJPEGData,
             sceneContextJPEGData: sceneContextJPEGData,
             opticsLocked: opticsLocked,
@@ -61,6 +77,14 @@ public struct OnDeviceAcousticClassifier: Sendable {
         activeFrames: Int = 9_600,
         clippingCeilingDBFS: Double = -0.5,
         scanSequenceNumber: Int? = nil,
+        batchRunID: String? = nil,
+        batchScanIndex: Int? = nil,
+        batchTotalCount: Int? = nil,
+        geometryCondition: String? = nil,
+        controlSeriesTag: String? = nil,
+        aeAfWbLockState: String? = nil,
+        targetLockState: String? = nil,
+        targetLockScore: Double? = nil,
         thumbnailJPEGData: Data? = nil,
         sceneContextJPEGData: Data? = nil,
         opticsLocked: Bool = false,
@@ -77,6 +101,12 @@ public struct OnDeviceAcousticClassifier: Sendable {
             visual: visual,
             opticsLocked: opticsLocked
         )
+        let resolvedOpticsState = aeAfWbLockState ?? (
+            visual.hint == .audioOnly ? "HEADLESS" : (opticsLocked ? "LOCKED" : "UNLOCKED_CONTINUOUS")
+        )
+        let resolvedTargetState = targetLockState ?? (
+            visual.hint == .audioOnly ? "HEADLESS" : "CAPTURED"
+        )
 
         // Compute raw frozen reference scores across ALL profiles first so Gate R1 always logs them
         let fullLibraryScores = computeFrozenCandidateDistances(
@@ -92,23 +122,71 @@ public struct OnDeviceAcousticClassifier: Sendable {
             return buildSolidNonLiquidItem(
                 features: features,
                 scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: "REJECTED_NON_LIQUID_OPTICS",
+                rejectionReason: String(
+                    format: "NON_LIQUID_SURFACE: vesselConf=%.2f, solidConf=%.2f",
+                    visual.vesselConfidence,
+                    visual.solidSurfaceConfidence
+                ),
                 allEntries: allEntries,
                 thumbnailJPEGData: thumbnailJPEGData
             )
         }
 
-        // 2. Audio Signal Quality Verification (`INVALID_MEASUREMENT`)
-        if samples.count < (preRollFrames + activeFrames / 2) ||
-            features.clippedSamples > 8 ||
-            features.activeSNRDB < minimumSNRDB {
+        // 2. Independent Audio Signal Quality Verification (`INVALID_MEASUREMENT` — never deletes raw telemetry)
+        let hasInverseDeconv = (inverseFilter != nil && !(inverseFilter?.isEmpty ?? true))
+        let insufficientFrames = samples.count < (preRollFrames + activeFrames / 2)
+        let hasClipping = features.clippedSamples > 8
+        let hasLowActiveSNR = features.activeSNRDB < minimumSNRDB
+        let hasLowTailSNR = hasInverseDeconv && features.tailSNRDB < 2.2
+
+        if insufficientFrames || hasClipping || hasLowActiveSNR || hasLowTailSNR {
             let reasonNote: String
-            if features.clippedSamples > 8 {
+            let machineReason: String
+            if insufficientFrames {
+                reasonNote = "The audio capture ended early before completing the test sweep. Hold steady in a quiet spot and try again."
+                machineReason = "INSUFFICIENT_CAPTURE_FRAMES: \(samples.count) frames"
+            } else if hasClipping {
                 reasonNote = "The sound reflection was too loud or clipped. Lower your volume slightly and try again."
-            } else {
+                machineReason = String(
+                    format: "ADC_CLIPPING: %d samples >= %.1f dBFS",
+                    features.clippedSamples,
+                    clippingCeilingDBFS
+                )
+            } else if hasLowActiveSNR {
                 reasonNote = "Ambient noise was too close to the acoustic test wave. Move to a quieter spot, hold steady near the container, and scan again."
+                machineReason = String(
+                    format: "LOW_ACTIVE_SNR: %.2f dB < %.2f dB",
+                    features.activeSNRDB,
+                    minimumSNRDB
+                )
+            } else {
+                reasonNote = "Container echo did not rise clearly above ambient background noise. Move closer to the container in a quiet room and scan again."
+                machineReason = String(
+                    format: "LOW_DECONVOLVED_TAIL_SNR: %.2f dB < 2.20 dB (echo buried in noise floor)",
+                    features.tailSNRDB
+                )
             }
             return ConsumerScanItem(
                 scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: "REJECTED_SIGNAL_QUALITY",
+                rejectionReason: machineReason,
                 status: .unclearScan,
                 title: "Scan Unclear",
                 formulaDisplay: "Signal Check",
@@ -136,6 +214,14 @@ public struct OnDeviceAcousticClassifier: Sendable {
            let calibratedResult = matchCalibratedPrototypes(
                features: features,
                scanSequenceNumber: scanSequenceNumber,
+               batchRunID: batchRunID,
+               batchScanIndex: batchScanIndex,
+               batchTotalCount: batchTotalCount,
+               geometryCondition: geometryCondition,
+               controlSeriesTag: controlSeriesTag,
+               aeAfWbLockState: resolvedOpticsState,
+               targetLockState: resolvedTargetState,
+               targetLockScore: targetLockScore,
                hasOptics: visual.hint != .audioOnly,
                prototypes: calibratedPrototypes,
                allFrozenEntries: allEntries,
@@ -153,12 +239,26 @@ public struct OnDeviceAcousticClassifier: Sendable {
             return buildSolidNonLiquidItem(
                 features: features,
                 scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: "REJECTED_NON_LIQUID_ACOUSTIC_FLATNESS",
+                rejectionReason: String(
+                    format: "FLAT_SPECULAR_REFLECTION: flatness=%.2f, prominence=%.1f dB",
+                    features.spectralFlatness,
+                    features.peakProminenceDB
+                ),
                 allEntries: allEntries,
                 thumbnailJPEGData: thumbnailJPEGData
             )
         }
 
-        // 5. Frozen Reference Evaluation + Stringent Ambiguity Gate (Repeatability Gate R1)
+        // 5. Frozen Reference Evaluation + Stringent Ambiguity Gate (Repeatability Gate R1 — FROZEN)
         let eligibleProfiles = resolveEligibleCandidates(for: visual.hint, features: features)
         let scored = computeFrozenCandidateDistances(profiles: eligibleProfiles, features: features)
         let scoredEntries = scored.map {
@@ -169,6 +269,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
             return buildUnmatchedItem(
                 features: features,
                 scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: "HELD_NO_ELIGIBLE_PROFILE",
+                rejectionReason: "NO_ELIGIBLE_CANDIDATE",
                 topEntry: allEntries.first,
                 secondEntry: allEntries.dropFirst().first,
                 allEntries: allEntries,
@@ -186,10 +296,48 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let effectiveThreshold = isExplicitLabelOrOptics ? 3.10 : distanceThreshold
 
         // STRINGENT AMBIGUITY GATE: Weak match OR close first/second candidates -> UNMATCHED (never force a chemical!)
-        if best.distance > effectiveThreshold || (!isExplicitLabelOrOptics && margin < minimumWinningMargin) {
+        let failsDistance = best.distance > effectiveThreshold
+        let failsMargin = !isExplicitLabelOrOptics && margin < minimumWinningMargin
+        if failsDistance || failsMargin {
+            let holdDecision: String
+            let holdReason: String
+            if failsDistance && failsMargin {
+                holdDecision = "HELD_AMBIGUITY_DISTANCE_AND_MARGIN"
+                holdReason = String(
+                    format: "AMBIGUITY_DISTANCE_AND_MARGIN: d=%.3f > %.2f AND margin=+%.3f < %.2f",
+                    best.distance,
+                    effectiveThreshold,
+                    margin,
+                    minimumWinningMargin
+                )
+            } else if failsDistance {
+                holdDecision = "HELD_AMBIGUITY_DISTANCE"
+                holdReason = String(
+                    format: "AMBIGUITY_DISTANCE: d=%.3f > %.2f",
+                    best.distance,
+                    effectiveThreshold
+                )
+            } else {
+                holdDecision = "HELD_AMBIGUITY_MARGIN"
+                holdReason = String(
+                    format: "AMBIGUITY_MARGIN: margin=+%.3f < %.2f",
+                    margin,
+                    minimumWinningMargin
+                )
+            }
             return buildUnmatchedItem(
                 features: features,
                 scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: holdDecision,
+                rejectionReason: holdReason,
                 topEntry: CandidateScoreEntry(profileID: best.profile.id, displayName: best.profile.displayName, distance: best.distance),
                 secondEntry: secondEntry,
                 allEntries: allEntries,
@@ -204,6 +352,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
 
         return ConsumerScanItem(
             scanSequenceNumber: scanSequenceNumber,
+            batchRunID: batchRunID,
+            batchScanIndex: batchScanIndex,
+            batchTotalCount: batchTotalCount,
+            geometryCondition: geometryCondition,
+            controlSeriesTag: controlSeriesTag,
+            aeAfWbLockState: resolvedOpticsState,
+            targetLockState: resolvedTargetState,
+            targetLockScore: targetLockScore,
+            gateDecision: "PASS_REFERENCE_MATCH",
+            rejectionReason: nil,
             status: .referenceMatch,
             title: best.profile.displayName,
             formulaDisplay: best.profile.formulaDisplay,
@@ -313,7 +471,9 @@ public struct OnDeviceAcousticClassifier: Sendable {
             peakDBFS: items.reduce(0.0) { $0 + $1.peakDBFS } / n,
             clippedSamples: 0,
             dominantPeakHz: items.reduce(0.0) { $0 + $1.dominantPeakHz } / n,
+            primaryPeakAmplitudeDB: items.reduce(0.0) { $0 + $1.primaryPeakAmplitudeDB } / n,
             secondaryPeaksHz: first.secondaryPeaksHz,
+            secondaryPeakAmplitudesDB: first.secondaryPeakAmplitudesDB,
             spectralCentroidHz: items.reduce(0.0) { $0 + $1.spectralCentroidHz } / n,
             midToHighBandDB: items.reduce(0.0) { $0 + $1.midToHighBandDB } / n,
             decaySlopeDBPerSec: items.reduce(0.0) { $0 + $1.decaySlopeDBPerSec } / n,
@@ -323,6 +483,11 @@ public struct OnDeviceAcousticClassifier: Sendable {
             cavityMultipathDB: items.reduce(0.0) { $0 + $1.cavityMultipathDB } / n,
             subBandShapeDB: avgBands,
             echoReturnDB: items.reduce(0.0) { $0 + $1.echoReturnDB } / n,
+            echoRMSDBFS: items.reduce(0.0) { $0 + $1.echoRMSDBFS } / n,
+            tailSNRDB: items.reduce(0.0) { $0 + $1.tailSNRDB } / n,
+            alignmentOffsetSamples: 0,
+            echoArrivalDelayMs: items.reduce(0.0) { $0 + $1.echoArrivalDelayMs } / n,
+            intraScanPersistenceRatio: items.reduce(0.0) { $0 + $1.intraScanPersistenceRatio } / n,
             featureVectorChecksum: first.featureVectorChecksum,
             opticalCenterBrightness: items.reduce(0.0) { $0 + $1.opticalCenterBrightness } / n,
             opticalInteriorContrast: items.reduce(0.0) { $0 + $1.opticalInteriorContrast } / n,
@@ -344,6 +509,14 @@ public struct OnDeviceAcousticClassifier: Sendable {
     private func matchCalibratedPrototypes(
         features: ExtractedConsumerFeatures,
         scanSequenceNumber: Int?,
+        batchRunID: String?,
+        batchScanIndex: Int?,
+        batchTotalCount: Int?,
+        geometryCondition: String?,
+        controlSeriesTag: String?,
+        aeAfWbLockState: String?,
+        targetLockState: String?,
+        targetLockScore: Double?,
         hasOptics: Bool,
         prototypes: [CalibratedAcousticPrototype],
         allFrozenEntries: [CandidateScoreEntry],
@@ -388,6 +561,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
             return buildSolidNonLiquidItem(
                 features: features,
                 scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: aeAfWbLockState,
+                targetLockState: targetLockState,
+                targetLockScore: targetLockScore,
+                gateDecision: "REJECTED_CALIBRATED_SOLID_SURFACE",
+                rejectionReason: String(format: "CALIBRATED_SOLID_MATCH: d=%.3f", bestTarget.distance),
                 allEntries: calEntries,
                 thumbnailJPEGData: thumbnailJPEGData
             )
@@ -396,6 +579,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
         if bestTarget.targetID == CalibratedAcousticPrototype.emptyContainerTargetID {
             return ConsumerScanItem(
                 scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: aeAfWbLockState,
+                targetLockState: targetLockState,
+                targetLockScore: targetLockScore,
+                gateDecision: "CALIBRATED_EMPTY_CONTAINER",
+                rejectionReason: nil,
                 status: .emptyContainer,
                 title: "Empty Container",
                 formulaDisplay: "No Liquid Fill Detected",
@@ -434,6 +627,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
 
         return ConsumerScanItem(
             scanSequenceNumber: scanSequenceNumber,
+            batchRunID: batchRunID,
+            batchScanIndex: batchScanIndex,
+            batchTotalCount: batchTotalCount,
+            geometryCondition: geometryCondition,
+            controlSeriesTag: controlSeriesTag,
+            aeAfWbLockState: aeAfWbLockState,
+            targetLockState: targetLockState,
+            targetLockScore: targetLockScore,
+            gateDecision: "PASS_CALIBRATED_MATCH",
+            rejectionReason: nil,
             status: .referenceMatch,
             title: matchedProfile.displayName,
             formulaDisplay: matchedProfile.formulaDisplay,
@@ -517,7 +720,9 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 peakDBFS: -120.0,
                 clippedSamples: 0,
                 dominantPeakHz: 2_220.0,
+                primaryPeakAmplitudeDB: -120.0,
                 secondaryPeaksHz: [],
+                secondaryPeakAmplitudesDB: [],
                 spectralCentroidHz: 2_560.0,
                 midToHighBandDB: 3.8,
                 decaySlopeDBPerSec: 76.0,
@@ -527,6 +732,11 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 cavityMultipathDB: -6.0,
                 subBandShapeDB: [0, 0, 0, 0, 0, 0],
                 echoReturnDB: -18.0,
+                echoRMSDBFS: -120.0,
+                tailSNRDB: 0.0,
+                alignmentOffsetSamples: 0,
+                echoArrivalDelayMs: 0.0,
+                intraScanPersistenceRatio: 0.0,
                 featureVectorChecksum: "00000000",
                 opticalCenterBrightness: visual.innerBrightness,
                 opticalInteriorContrast: visual.innerSpatialContrast,
@@ -544,71 +754,307 @@ public struct OnDeviceAcousticClassifier: Sendable {
             if a >= clipLin { clipped += 1 }
         }
 
-        let preEnd = max(1, min(samples.count, preRollFrames))
-        let actStart = min(samples.count, preRollFrames)
-        let actEnd = min(samples.count, preRollFrames + max(1, activeFrames))
+        var preEnd = max(1, min(samples.count, preRollFrames))
+        var actStart = min(samples.count, preRollFrames)
+        var actEnd = min(samples.count, preRollFrames + max(1, activeFrames))
 
-        let preRMS = Self.segmentRMS(samples, start: 0, end: preEnd)
-        let actRMS = actEnd > actStart ? Self.segmentRMS(samples, start: actStart, end: actEnd) : 0.0
-        let preDB = ImmediateAudioAnalyzer.linearToDBFS(preRMS)
-        let actDB = ImmediateAudioAnalyzer.linearToDBFS(actRMS)
-        let snrDB = max(0.0, actDB - preDB)
+        var preRMS = Self.segmentRMS(samples, start: 0, end: preEnd)
+        var actRMS = actEnd > actStart ? Self.segmentRMS(samples, start: actStart, end: actEnd) : 0.0
+        var preDB = ImmediateAudioAnalyzer.linearToDBFS(preRMS)
+        var actDB = ImmediateAudioAnalyzer.linearToDBFS(actRMS)
+        var snrDB = max(0.0, actDB - preDB)
 
-        let preFizzHighPower = Self.bandPower(
-            slice: Array(samples[0..<preEnd]).map { $0.isFinite ? Double($0) : 0.0 },
-            sampleRateHz: sampleRateHz,
-            lowHz: 5_200.0,
-            highHz: 11_800.0
-        )
+        let nFFT = 4_096
+        let binHz = sampleRateHz / Double(nFFT)
+        let minBin = max(2, Int(ceil(1_200.0 / binHz)))
+        let maxPassBin = min(nFFT / 2 - 3, Int(floor(9_600.0 / binHz)))
+        let maxScatterBin = min(nFFT / 2 - 2, Int(floor(11_800.0 / binHz)))
 
-        let analysisSignal: [Double]
-        let applyHardwareSpeakerTrim: Bool
+        var analysisSignal: [Double] = []
+        var weightedPower = [Double](repeating: 0.0, count: nFFT / 2)
+        var peakRankPower = [Double](repeating: 0.0, count: nFFT / 2)
+        var windowPowerScale = 1.0
+        var windowCoherentAmpSum = 1.0
         var noiseFloorPowerPerSample = 0.0
         var echoReturnDB = -14.0
+        var tailSNRDB = max(0.0, snrDB - 6.0)
+        var alignmentOffsetSamples = 0
+        var echoArrivalDelayMs = 2.2
+        var persistenceByBin = [Double](repeating: 1.0, count: nFFT / 2)
+        var scaledPreFizzScatterTerm = 0.0
 
-        let searchStart = max(0, preEnd / 2)
-        if let inv = inverseFilter, !inv.isEmpty, samples.count > searchStart + 512 {
-            applyHardwareSpeakerTrim = true
-            let responseSlice = Array(samples[searchStart..<samples.count]).map { $0.isFinite ? Double($0) : 0.0 }
+        if let inv = inverseFilter, !inv.isEmpty, samples.count > max(512, inv.count / 2) {
+            // 1. Convolve full recording with matched ESS inverse filter for exact sample-accurate sync!
+            let fullDouble = samples.map { $0.isFinite ? Double($0) : 0.0 }
             let invDouble = inv.map { $0.isFinite ? Double($0) : 0.0 }
-            let ir = Self.fastLinearConvolve(responseSlice, invDouble)
+            let ir = Self.fastLinearConvolve(fullDouble, invDouble)
 
-            var peakIdx = 0
+            let expectedPeak = preRollFrames + inv.count - 1
+            let searchLo = max(0, inv.count - 1 - Int(0.050 * sampleRateHz))
+            let searchHi = min(ir.count, expectedPeak + Int(0.180 * sampleRateHz))
+            var peakIdx = min(max(0, expectedPeak), max(0, ir.count - 1))
             var maxAbs = 0.0
-            for (idx, val) in ir.enumerated() {
-                let a = abs(val)
-                if a > maxAbs {
-                    maxAbs = a
-                    peakIdx = idx
+            if searchHi > searchLo {
+                for idx in searchLo..<searchHi {
+                    let a = abs(ir[idx])
+                    if a > maxAbs {
+                        maxAbs = a
+                        peakIdx = idx
+                    }
+                }
+            } else {
+                for (idx, val) in ir.enumerated() {
+                    let a = abs(val)
+                    if a > maxAbs {
+                        maxAbs = a
+                        peakIdx = idx
+                    }
                 }
             }
 
+            // 2. Recompute pre-roll & active sweep RMS on exact sample-aligned sweep bounds
+            let alignedActStart = max(0, min(samples.count - 1, peakIdx - (inv.count - 1)))
+            let alignedActEnd = min(samples.count, alignedActStart + max(1, activeFrames))
+            alignmentOffsetSamples = alignedActStart - preRollFrames
+
+            // Skip initial 25 ms hardware ADC startup transient and leave 5 ms guard before sweep onset
+            let settleSkip = min(alignedActStart, Int(0.025 * sampleRateHz))
+            let guardSamples = Int(0.005 * sampleRateHz)
+            let alignedPreEnd = max(0, alignedActStart - guardSamples)
+            let alignedPreStart = (alignedPreEnd - settleSkip >= 256) ? settleSkip : 0
+
+            if alignedPreEnd > alignedPreStart + 64 {
+                preRMS = Self.segmentRMS(samples, start: alignedPreStart, end: alignedPreEnd)
+                preEnd = alignedPreEnd
+            }
+            if alignedActEnd > alignedActStart + 256 {
+                actRMS = Self.segmentRMS(samples, start: alignedActStart, end: alignedActEnd)
+                actStart = alignedActStart
+                actEnd = alignedActEnd
+            }
+            preDB = ImmediateAudioAnalyzer.linearToDBFS(preRMS)
+            actDB = ImmediateAudioAnalyzer.linearToDBFS(actRMS)
+            snrDB = max(0.0, actDB - preDB)
+
+            // 3. Causal container reflection gate [t0 + 1.25 ms .. t0 + 15.0 ms]
+            // Captures close-up & 15-in (2.22 ms) arrival at unity weight while cutting >2.5 m room walls
             let dirStart = max(0, peakIdx - Int(0.0004 * sampleRateHz))
-            let dirEnd = min(ir.count, peakIdx + Int(0.0012 * sampleRateHz))
-            let tailStart = min(ir.count, peakIdx + Int(0.0020 * sampleRateHz))
-            let tailEnd = min(ir.count, peakIdx + Int(0.0280 * sampleRateHz))
+            let dirEnd = min(ir.count, peakIdx + Int(0.0011 * sampleRateHz))
+            let tailStart = min(ir.count, peakIdx + Int(0.00125 * sampleRateHz))
+            let tailEnd = min(ir.count, peakIdx + Int(0.0150 * sampleRateHz))
 
-            if dirEnd > dirStart && tailEnd > tailStart {
-                let dirMean = ir[dirStart..<dirEnd].reduce(1e-15) { $0 + $1 * $1 } / Double(dirEnd - dirStart)
-                let echoMean = ir[tailStart..<tailEnd].reduce(1e-15) { $0 + $1 * $1 } / Double(tailEnd - tailStart)
-                echoReturnDB = min(0.0, max(-42.0, 10.0 * log10(echoMean / max(dirMean, 1e-15))))
+            // Measure physical echo arrival delay after direct path t0
+            let arrivalLo = min(ir.count, peakIdx + Int(0.00065 * sampleRateHz))
+            let arrivalHi = min(ir.count, peakIdx + Int(0.0120 * sampleRateHz))
+            if arrivalHi > arrivalLo {
+                var maxEnv = 0.0
+                var bestOff = arrivalLo
+                for k in arrivalLo..<arrivalHi {
+                    let a = abs(ir[k])
+                    if a > maxEnv {
+                        maxEnv = a
+                        bestOff = k
+                    }
+                }
+                echoArrivalDelayMs = max(0.5, Double(bestOff - peakIdx) * 1_000.0 / sampleRateHz)
             }
 
-            let floorStart = min(ir.count, peakIdx + Int(0.0480 * sampleRateHz))
+            var dirMean = 1e-15
+            var echoMean = 1e-15
+            if dirEnd > dirStart {
+                dirMean = ir[dirStart..<dirEnd].reduce(1e-15) { $0 + $1 * $1 } / Double(dirEnd - dirStart)
+            }
+            if tailEnd > tailStart {
+                echoMean = ir[tailStart..<tailEnd].reduce(1e-15) { $0 + $1 * $1 } / Double(tailEnd - tailStart)
+            }
+
+            // 4. Empirical deconvolved noise spectrum from quiet post-tail region [t0 + 42 ms .. t0 + 68 ms]
+            // Removes Farina ESS inverse-filter +3 dB/octave high-frequency noise tilt without frequency bias!
+            let floorStart = min(ir.count, peakIdx + Int(0.0420 * sampleRateHz))
             let floorEnd = min(ir.count, peakIdx + Int(0.0680 * sampleRateHz))
-            if floorEnd - floorStart >= 128 {
-                let floorSum = ir[floorStart..<floorEnd].reduce(0.0) { $0 + $1 * $1 }
-                noiseFloorPowerPerSample = floorSum / Double(floorEnd - floorStart)
+            var noisePowerSpec = [Double](repeating: 0.0, count: nFFT / 2)
+            if floorEnd - floorStart >= 256 {
+                let floorSlice = Array(ir[floorStart..<floorEnd])
+                let fLen = min(floorSlice.count, nFFT)
+                let floorSum = floorSlice[0..<fLen].reduce(0.0) { $0 + $1 * $1 }
+                noiseFloorPowerPerSample = floorSum / Double(fLen)
+
+                var nr = [Double](repeating: 0.0, count: nFFT)
+                var ni = [Double](repeating: 0.0, count: nFFT)
+                var wNormNoise = 0.0
+                for i in 0..<fLen {
+                    let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(i) / Double(max(1, fLen - 1))))
+                    nr[i] = floorSlice[i] * w
+                    wNormNoise += w * w
+                }
+                Self.fftRadix2(real: &nr, imag: &ni, inverse: false)
+                var rawNP = [Double](repeating: 0.0, count: nFFT / 2)
+                let invWNorm = 1.0 / max(1e-9, wNormNoise)
+                for b in 0..<(nFFT / 2) {
+                    rawNP[b] = (nr[b] * nr[b] + ni[b] * ni[b]) * invWNorm
+                }
+                for b in 1..<(nFFT / 2 - 1) {
+                    var s = 0.0
+                    var c = 0.0
+                    let kLo = max(1, b - 6)
+                    let kHi = min(nFFT / 2 - 1, b + 6)
+                    for k in kLo...kHi {
+                        s += rawNP[k]
+                        c += 1.0
+                    }
+                    noisePowerSpec[b] = c > 0 ? (s / c) : rawNP[b]
+                }
             }
 
-            if tailEnd - tailStart >= 256 {
+            let rawTailSNR = 10.0 * log10(max(echoMean, 1e-18) / max(noiseFloorPowerPerSample, 1e-18))
+            tailSNRDB = max(-10.0, min(60.0, rawTailSNR))
+            let netEchoMean = max(echoMean * 0.15, echoMean - 0.85 * noiseFloorPowerPerSample)
+            echoReturnDB = min(0.0, max(-42.0, 10.0 * log10(netEchoMean / max(dirMean, 1e-15))))
+
+            if tailEnd - tailStart >= 192 {
                 analysisSignal = Array(ir[tailStart..<tailEnd])
             } else {
-                analysisSignal = Array(samples[actStart..<actEnd]).map { $0.isFinite ? Double($0) : 0.0 }
+                analysisSignal = Array(samples[actStart..<max(actStart + 1, actEnd)]).map { $0.isFinite ? Double($0) : 0.0 }
+            }
+
+            // 5. Asymmetric Tukey-tapered gate + overlapping sustain sub-window for intra-scan modal persistence
+            let copyCount = min(analysisSignal.count, nFFT)
+            var real1 = [Double](repeating: 0.0, count: nFFT)
+            var imag1 = [Double](repeating: 0.0, count: nFFT)
+            let leadIn = min(Int(0.00045 * sampleRateHz), max(1, copyCount / 6))
+            let flatEnd = min(copyCount, Int(0.00725 * sampleRateHz))
+            var wNorm1 = 0.0
+            var wSum1 = 0.0
+            if copyCount > 1 {
+                for i in 0..<copyCount {
+                    let w: Double
+                    if i < leadIn {
+                        w = 0.5 * (1.0 - cos(Double.pi * Double(i) / Double(max(1, leadIn))))
+                    } else if i > flatEnd {
+                        let rem = max(1, copyCount - 1 - flatEnd)
+                        w = 0.5 * (1.0 + cos(Double.pi * Double(i - flatEnd) / Double(rem)))
+                    } else {
+                        w = 1.0
+                    }
+                    real1[i] = analysisSignal[i] * w
+                    wNorm1 += w * w
+                    wSum1 += w
+                }
+            }
+            Self.fftRadix2(real: &real1, imag: &imag1, inverse: false)
+            windowPowerScale = max(1.0, wNorm1)
+            windowCoherentAmpSum = max(1.0, wSum1)
+
+            // Sub-window Early [0..56%] & Sub-window Sustain [20..82%] (Welch 3-gate modal persistence)
+            let earlyLen = max(8, min(copyCount, Int(0.56 * Double(copyCount))))
+            var realEarly = [Double](repeating: 0.0, count: nFFT)
+            var imagEarly = [Double](repeating: 0.0, count: nFFT)
+            var wNormEarly = 0.0
+            if copyCount >= 16 {
+                for idx in 0..<earlyLen {
+                    let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(idx) / Double(max(1, earlyLen - 1))))
+                    realEarly[idx] = analysisSignal[idx] * w
+                    wNormEarly += w * w
+                }
+                Self.fftRadix2(real: &realEarly, imag: &imagEarly, inverse: false)
+            }
+
+            let subOffset = min(max(0, copyCount - 32), Int(0.20 * Double(copyCount)))
+            let subLen = max(8, min(copyCount - subOffset, Int(0.62 * Double(copyCount))))
+            var real2 = [Double](repeating: 0.0, count: nFFT)
+            var imag2 = [Double](repeating: 0.0, count: nFFT)
+            var wNorm2 = 0.0
+            if subLen > 8 && (subOffset + subLen) <= copyCount {
+                for idx in 0..<subLen {
+                    let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(idx) / Double(max(1, subLen - 1))))
+                    real2[idx] = analysisSignal[subOffset + idx] * w
+                    wNorm2 += w * w
+                }
+                Self.fftRadix2(real: &real2, imag: &imag2, inverse: false)
+            }
+
+            var cleanP1 = [Double](repeating: 0.0, count: nFFT / 2)
+            var cleanP2 = [Double](repeating: 0.0, count: nFFT / 2)
+            var persistRaw = [Double](repeating: 0.85, count: nFFT / 2)
+            let bLo = max(1, minBin - 1)
+            let bHi = min(nFFT / 2 - 1, maxScatterBin + 1)
+            if bHi >= bLo {
+                for b in bLo...bHi {
+                    let unitFull = (real1[b] * real1[b] + imag1[b] * imag1[b]) / max(1e-9, wNorm1)
+                    let unitEarly = wNormEarly > 1e-6
+                        ? (realEarly[b] * realEarly[b] + imagEarly[b] * imagEarly[b]) / wNormEarly
+                        : unitFull
+                    let unitSust = wNorm2 > 1e-6
+                        ? (real2[b] * real2[b] + imag2[b] * imag2[b]) / wNorm2
+                        : unitFull
+                    let nf = noisePowerSpec[b]
+                    let cFull = max(unitFull * 0.04, unitFull - 1.45 * nf) * windowPowerScale
+                    let cEarly = max(unitEarly * 0.04, unitEarly - 1.45 * nf) * windowPowerScale
+                    let cSust = max(unitSust * 0.04, unitSust - 1.45 * nf) * windowPowerScale
+                    cleanP1[b] = cFull
+                    cleanP2[b] = pow(max(0.0, cFull * cEarly * cSust), 1.0 / 3.0)
+                    let hi = max(cEarly, cSust)
+                    persistRaw[b] = hi > 1e-18 ? min(1.0, min(cEarly, cSust) / hi) : 0.5
+                }
+            }
+
+            if maxScatterBin > minBin {
+                for b in minBin...maxScatterBin {
+                    let smooth1 = 0.25 * cleanP1[b - 1] + 0.50 * cleanP1[b] + 0.25 * cleanP1[b + 1]
+                    let smooth2 = 0.25 * cleanP2[b - 1] + 0.50 * cleanP2[b] + 0.25 * cleanP2[b + 1]
+                    let f = Double(b) * binHz
+                    let normAbove = max(0.0, (f - 3_200.0) / 3_800.0)
+                    let speakerWeight = 1.0 / (1.0 + 0.28 * pow(normAbove, 1.3))
+                    weightedPower[b] = smooth1 * speakerWeight
+                    peakRankPower[b] = smooth2 * speakerWeight
+                    persistenceByBin[b] = persistRaw[b]
+                }
+            }
+
+            // Scale settled pre-roll excess micro-bubble fizz into the deconvolved ir gain domain
+            if alignedPreEnd > alignedPreStart + 512 {
+                let settledPre = Array(samples[alignedPreStart..<alignedPreEnd]).map { $0.isFinite ? Double($0) : 0.0 }
+                let preHF = Self.bandPower(slice: settledPre, sampleRateHz: sampleRateHz, lowHz: 5_200.0, highHz: 11_800.0)
+                let preMid = Self.bandPower(slice: settledPre, sampleRateHz: sampleRateHz, lowHz: 1_500.0, highHz: 4_200.0)
+                let excessFizz = max(0.0, preHF - 0.85 * preMid)
+                let deconvGainRatio = netEchoMean / max(actRMS * actRMS, 1e-12)
+                scaledPreFizzScatterTerm = 6.0 * excessFizz * Double(nFFT) * deconvGainRatio * windowPowerScale
             }
         } else {
-            applyHardwareSpeakerTrim = false
+            // Direct active-window analysis path (headless unit tests & non-deconvolved fallback)
             analysisSignal = Array(samples[actStart..<max(actStart + 1, actEnd)]).map { $0.isFinite ? Double($0) : 0.0 }
+            let preFizzHighPower = Self.bandPower(
+                slice: Array(samples[0..<preEnd]).map { $0.isFinite ? Double($0) : 0.0 },
+                sampleRateHz: sampleRateHz,
+                lowHz: 5_200.0,
+                highHz: 11_800.0
+            )
+            scaledPreFizzScatterTerm = 6.0 * preFizzHighPower * Double(nFFT)
+
+            var real = [Double](repeating: 0.0, count: nFFT)
+            var imag = [Double](repeating: 0.0, count: nFFT)
+            let copyCount = min(analysisSignal.count, nFFT)
+            var wNorm = 0.0
+            var wSum = 0.0
+            if copyCount > 1 {
+                for i in 0..<copyCount {
+                    let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(i) / Double(copyCount - 1)))
+                    real[i] = analysisSignal[i] * w
+                    wNorm += w * w
+                    wSum += w
+                }
+            }
+            Self.fftRadix2(real: &real, imag: &imag, inverse: false)
+            windowPowerScale = max(1.0, wNorm)
+            windowCoherentAmpSum = max(1.0, wSum)
+
+            if maxScatterBin > minBin {
+                for b in minBin...maxScatterBin {
+                    let rawP = real[b] * real[b] + imag[b] * imag[b]
+                    weightedPower[b] = rawP
+                    peakRankPower[b] = rawP
+                }
+            }
         }
 
         let specCount = max(1, min(analysisSignal.count / 4, Int(0.0025 * sampleRateHz)))
@@ -622,61 +1068,30 @@ public struct OnDeviceAcousticClassifier: Sendable {
             cavityMultipathDB = -3.0
         }
 
-        let nFFT = 4_096
-        var real = [Double](repeating: 0.0, count: nFFT)
-        var imag = [Double](repeating: 0.0, count: nFFT)
-        let copyCount = min(analysisSignal.count, nFFT)
-        if copyCount > 1 {
-            for i in 0..<copyCount {
-                let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(i) / Double(copyCount - 1)))
-                real[i] = analysisSignal[i] * w
-            }
-        }
-        Self.fftRadix2(real: &real, imag: &imag, inverse: false)
-
-        let binHz = sampleRateHz / Double(nFFT)
-        let minBin = max(1, Int(ceil(1_200.0 / binHz)))
-        let maxPassBin = min(nFFT / 2 - 2, Int(floor(9_600.0 / binHz)))
-        let maxScatterBin = min(nFFT / 2 - 1, Int(floor(11_800.0 / binHz)))
-
-        var weightedPower = [Double](repeating: 0.0, count: nFFT / 2)
-        if maxScatterBin > minBin {
-            for b in minBin...maxScatterBin {
-                let rawP = real[b] * real[b] + imag[b] * imag[b]
-                let f = Double(b) * binHz
-                let speakerWeight: Double
-                if applyHardwareSpeakerTrim {
-                    let normAbove = max(0.0, (f - 3_200.0) / 3_800.0)
-                    speakerWeight = 1.0 / (1.0 + 0.28 * pow(normAbove, 1.3))
-                } else {
-                    speakerWeight = 1.0
-                }
-                weightedPower[b] = rawP * speakerWeight
-            }
-        }
-
-        // Exact raw primary & secondary local spectral peaks (parabolic bin interpolation, zero artificial smoothing!)
-        var localPeaks: [(freqHz: Double, power: Double)] = []
+        // Local spectral candidate peaks ranked by persistent modal power (parabolic bin interpolation)
+        var localPeaks: [(bin: Int, freqHz: Double, rankScore: Double, power: Double)] = []
         if maxPassBin > minBin + 1 {
             for b in (minBin + 1)..<maxPassBin {
-                let p0 = weightedPower[b]
-                let pLeft = weightedPower[b - 1]
-                let pRight = weightedPower[b + 1]
+                let p0 = peakRankPower[b]
+                let pLeft = peakRankPower[b - 1]
+                let pRight = peakRankPower[b + 1]
                 if p0 >= pLeft && p0 > pRight && p0 > 1e-16 {
                     let denom = pLeft - 2.0 * p0 + pRight
                     let delta = abs(denom) > 1e-18 ? max(-0.5, min(0.5, 0.5 * (pLeft - pRight) / denom)) : 0.0
                     let interpHz = (Double(b) + delta) * binHz
-                    localPeaks.append((interpHz, p0))
+                    localPeaks.append((b, interpHz, p0, weightedPower[b]))
                 }
             }
         }
-        localPeaks.sort { $0.power > $1.power }
+        localPeaks.sort { $0.rankScore > $1.rankScore }
 
-        var distinctPeaksHz: [Double] = []
+        var distinctPeaks: [(bin: Int, freqHz: Double, ampDB: Double)] = []
+        let ampNorm = max(1e-6, pow(0.5 * windowCoherentAmpSum, 2.0))
         for pk in localPeaks {
-            if distinctPeaksHz.allSatisfy({ abs($0 - pk.freqHz) >= 180.0 }) {
-                distinctPeaksHz.append(pk.freqHz)
-                if distinctPeaksHz.count >= 4 { break }
+            if distinctPeaks.allSatisfy({ abs($0.freqHz - pk.freqHz) >= 180.0 }) {
+                let db = 10.0 * log10(max(pk.power / ampNorm, 1e-18))
+                distinctPeaks.append((pk.bin, pk.freqHz, db))
+                if distinctPeaks.count >= 4 { break }
             }
         }
 
@@ -695,6 +1110,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
         var powerSum = 1e-15
         var maxBinPower = 1e-15
         var fallbackPeakHz = 2_220.0
+        var fallbackBin = minBin
         var midBandPower = 1e-15
         var highBandPower = 1e-15
         var coreRefPower = 1e-15
@@ -718,6 +1134,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
                     if p > maxBinPower {
                         maxBinPower = p
                         fallbackPeakHz = f
+                        fallbackBin = b
                     }
                     if f >= 1_200.0 && f < 3_200.0 {
                         midBandPower += p
@@ -738,8 +1155,15 @@ public struct OnDeviceAcousticClassifier: Sendable {
             }
         }
 
-        let primaryPeakHz = distinctPeaksHz.first ?? fallbackPeakHz
-        let secondaryPeaksHz = Array(distinctPeaksHz.dropFirst())
+        let primaryPeakHz = distinctPeaks.first?.freqHz ?? fallbackPeakHz
+        let primaryPeakBin = distinctPeaks.first?.bin ?? fallbackBin
+        let primaryPeakAmpDB = distinctPeaks.first?.ampDB ?? (10.0 * log10(max(maxBinPower / ampNorm, 1e-18)))
+        let secondaryPeaksHz = distinctPeaks.dropFirst().map(\.freqHz)
+        let secondaryPeakAmpsDB = distinctPeaks.dropFirst().map(\.ampDB)
+        let primaryPersistence = (primaryPeakBin >= 0 && primaryPeakBin < persistenceByBin.count)
+            ? persistenceByBin[primaryPeakBin]
+            : 0.85
+        let echoRMSDBFS = max(-120.0, actDB + echoReturnDB)
 
         let rawBandDB: [Double] = (0..<6).map { k in
             let meanP = subBandCnt[k] > 0 ? (subBandSum[k] / subBandCnt[k]) : 1e-15
@@ -751,7 +1175,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let centroidHz = weightedFreqSum / powerSum
         let midToHighDB = min(14.0, max(-14.0, 10.0 * log10(midBandPower / highBandPower)))
 
-        let combinedScatter = upperScatterPower + 6.0 * preFizzHighPower * Double(nFFT)
+        let combinedScatter = upperScatterPower + scaledPreFizzScatterTerm
         let highFreqBubbleScatterDB = min(4.0, max(-12.0, 10.0 * log10(combinedScatter / coreRefPower)))
 
         let meanBinPower = flatnessBinCount > 0 ? (powerSum / Double(flatnessBinCount)) : 1e-15
@@ -792,7 +1216,9 @@ public struct OnDeviceAcousticClassifier: Sendable {
             peakDBFS: ImmediateAudioAnalyzer.linearToDBFS(peakLin),
             clippedSamples: clipped,
             dominantPeakHz: primaryPeakHz,
+            primaryPeakAmplitudeDB: primaryPeakAmpDB,
             secondaryPeaksHz: secondaryPeaksHz,
+            secondaryPeakAmplitudesDB: secondaryPeakAmpsDB,
             spectralCentroidHz: centroidHz,
             midToHighBandDB: midToHighDB,
             decaySlopeDBPerSec: decayDBPerSec,
@@ -802,6 +1228,11 @@ public struct OnDeviceAcousticClassifier: Sendable {
             cavityMultipathDB: cavityMultipathDB,
             subBandShapeDB: subBandShapeDB,
             echoReturnDB: echoReturnDB,
+            echoRMSDBFS: echoRMSDBFS,
+            tailSNRDB: tailSNRDB,
+            alignmentOffsetSamples: alignmentOffsetSamples,
+            echoArrivalDelayMs: echoArrivalDelayMs,
+            intraScanPersistenceRatio: primaryPersistence,
             featureVectorChecksum: checksumHex,
             opticalCenterBrightness: visual.innerBrightness,
             opticalInteriorContrast: visual.innerSpatialContrast,
@@ -813,6 +1244,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
     private func buildSolidNonLiquidItem(
         features: ExtractedConsumerFeatures,
         scanSequenceNumber: Int?,
+        batchRunID: String? = nil,
+        batchScanIndex: Int? = nil,
+        batchTotalCount: Int? = nil,
+        geometryCondition: String? = nil,
+        controlSeriesTag: String? = nil,
+        aeAfWbLockState: String? = nil,
+        targetLockState: String? = nil,
+        targetLockScore: Double? = nil,
+        gateDecision: String = "REJECTED_NON_LIQUID_SURFACE",
+        rejectionReason: String = "NON_LIQUID_SURFACE",
         allEntries: [CandidateScoreEntry],
         thumbnailJPEGData: Data?
     ) -> ConsumerScanItem {
@@ -820,6 +1261,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let second = allEntries.dropFirst().first
         return ConsumerScanItem(
             scanSequenceNumber: scanSequenceNumber,
+            batchRunID: batchRunID,
+            batchScanIndex: batchScanIndex,
+            batchTotalCount: batchTotalCount,
+            geometryCondition: geometryCondition,
+            controlSeriesTag: controlSeriesTag,
+            aeAfWbLockState: aeAfWbLockState,
+            targetLockState: targetLockState,
+            targetLockScore: targetLockScore,
+            gateDecision: gateDecision,
+            rejectionReason: rejectionReason,
             status: .nonLiquidMaterial,
             title: "Solid / Non-Liquid Material",
             formulaDisplay: "No Liquid Container Detected",
@@ -845,6 +1296,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
     private func buildUnmatchedItem(
         features: ExtractedConsumerFeatures,
         scanSequenceNumber: Int?,
+        batchRunID: String? = nil,
+        batchScanIndex: Int? = nil,
+        batchTotalCount: Int? = nil,
+        geometryCondition: String? = nil,
+        controlSeriesTag: String? = nil,
+        aeAfWbLockState: String? = nil,
+        targetLockState: String? = nil,
+        targetLockScore: Double? = nil,
+        gateDecision: String = "HELD_AMBIGUITY_GATE",
+        rejectionReason: String? = nil,
         topEntry: CandidateScoreEntry?,
         secondEntry: CandidateScoreEntry?,
         allEntries: [CandidateScoreEntry],
@@ -860,6 +1321,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
 
         return ConsumerScanItem(
             scanSequenceNumber: scanSequenceNumber,
+            batchRunID: batchRunID,
+            batchScanIndex: batchScanIndex,
+            batchTotalCount: batchTotalCount,
+            geometryCondition: geometryCondition,
+            controlSeriesTag: controlSeriesTag,
+            aeAfWbLockState: aeAfWbLockState,
+            targetLockState: targetLockState,
+            targetLockScore: targetLockScore,
+            gateDecision: gateDecision,
+            rejectionReason: rejectionReason,
             status: .unmatchedSignature,
             title: "Unmatched Liquid",
             formulaDisplay: "Acoustic Profile",

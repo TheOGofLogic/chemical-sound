@@ -25,6 +25,58 @@ public enum ConsumerMatchStatus: String, Codable, Equatable, Sendable {
     case unclearScan = "INVALID_MEASUREMENT"
 }
 
+/// Geometry condition tag preventing substantially different camera/container distances from being pooled
+/// into the same Repeatability Gate R1 summary statistics.
+public enum GeometryTestCondition: String, Codable, CaseIterable, Equatable, Sendable {
+    case stationary15InBaseline = "STATIONARY_15IN_BASELINE"
+    case closeRangeSub8In = "CLOSE_RANGE_SUB_8IN"
+    case handheldGeneral = "HANDHELD_GENERAL"
+
+    public var displayLabel: String {
+        switch self {
+        case .stationary15InBaseline:
+            return "15-in Stationary Baseline"
+        case .closeRangeSub8In:
+            return "Close-Range (<8 in)"
+        case .handheldGeneral:
+            return "Standard Handheld"
+        }
+    }
+}
+
+/// Post-acquisition audit label for controlled R1 series (strictly firewalled from classifier input).
+public enum ControlSeriesTag: String, Codable, CaseIterable, Equatable, Sendable {
+    case unlabeledBlind = "UNLABELED_BLIND"
+    case emptyContainer = "CONTROL_A_EMPTY_CONTAINER"
+    case water = "CONTROL_B_WATER"
+    case saltWater = "CONTROL_C_SALT_WATER"
+    case hydrogenPeroxide = "CONTROL_D_HYDROGEN_PEROXIDE"
+    case vinegar = "CONTROL_E_VINEGAR"
+    case cookingOil = "CONTROL_F_COOKING_OIL"
+    case solidNonLiquid = "CONTROL_G_SOLID_NON_LIQUID"
+
+    public var displayLabel: String {
+        switch self {
+        case .unlabeledBlind:
+            return "Blind / Unlabeled"
+        case .emptyContainer:
+            return "A. Empty Container"
+        case .water:
+            return "B. Water"
+        case .saltWater:
+            return "C. Salt-Water Standard"
+        case .hydrogenPeroxide:
+            return "D. Hydrogen Peroxide"
+        case .vinegar:
+            return "E. Vinegar"
+        case .cookingOil:
+            return "F. Cooking / Veg Oil"
+        case .solidNonLiquid:
+            return "G. Solid / Non-Liquid"
+        }
+    }
+}
+
 /// Raw distance score against a single frozen reference profile for Repeatability Gate R1 auditing.
 public struct CandidateScoreEntry: Codable, Equatable, Identifiable, Sendable {
     public var id: String { profileID }
@@ -46,7 +98,9 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
     public let peakDBFS: Double
     public let clippedSamples: Int
     public let dominantPeakHz: Double
+    public let primaryPeakAmplitudeDB: Double
     public let secondaryPeaksHz: [Double]
+    public let secondaryPeakAmplitudesDB: [Double]
     public let spectralCentroidHz: Double
     public let midToHighBandDB: Double
     public let decaySlopeDBPerSec: Double
@@ -56,6 +110,11 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
     public let cavityMultipathDB: Double
     public let subBandShapeDB: [Double]
     public let echoReturnDB: Double
+    public let echoRMSDBFS: Double
+    public let tailSNRDB: Double
+    public let alignmentOffsetSamples: Int
+    public let echoArrivalDelayMs: Double
+    public let intraScanPersistenceRatio: Double
     public let featureVectorChecksum: String
     public let opticalCenterBrightness: Double
     public let opticalInteriorContrast: Double
@@ -68,7 +127,9 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         peakDBFS: Double,
         clippedSamples: Int,
         dominantPeakHz: Double,
+        primaryPeakAmplitudeDB: Double = -24.0,
         secondaryPeaksHz: [Double] = [],
+        secondaryPeakAmplitudesDB: [Double] = [],
         spectralCentroidHz: Double,
         midToHighBandDB: Double,
         decaySlopeDBPerSec: Double,
@@ -78,6 +139,11 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         cavityMultipathDB: Double = -3.0,
         subBandShapeDB: [Double] = [0, 0, 0, 0, 0, 0],
         echoReturnDB: Double = -14.0,
+        echoRMSDBFS: Double = -52.0,
+        tailSNRDB: Double = 12.0,
+        alignmentOffsetSamples: Int = 0,
+        echoArrivalDelayMs: Double = 2.2,
+        intraScanPersistenceRatio: Double = 0.85,
         featureVectorChecksum: String = "00000000",
         opticalCenterBrightness: Double = 0.50,
         opticalInteriorContrast: Double = 0.02,
@@ -89,7 +155,9 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         self.peakDBFS = peakDBFS
         self.clippedSamples = clippedSamples
         self.dominantPeakHz = dominantPeakHz
+        self.primaryPeakAmplitudeDB = primaryPeakAmplitudeDB
         self.secondaryPeaksHz = secondaryPeaksHz
+        self.secondaryPeakAmplitudesDB = secondaryPeakAmplitudesDB
         self.spectralCentroidHz = spectralCentroidHz
         self.midToHighBandDB = midToHighBandDB
         self.decaySlopeDBPerSec = decaySlopeDBPerSec
@@ -99,11 +167,80 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         self.cavityMultipathDB = cavityMultipathDB
         self.subBandShapeDB = subBandShapeDB
         self.echoReturnDB = echoReturnDB
+        self.echoRMSDBFS = echoRMSDBFS
+        self.tailSNRDB = tailSNRDB
+        self.alignmentOffsetSamples = alignmentOffsetSamples
+        self.echoArrivalDelayMs = echoArrivalDelayMs
+        self.intraScanPersistenceRatio = intraScanPersistenceRatio
         self.featureVectorChecksum = featureVectorChecksum
         self.opticalCenterBrightness = opticalCenterBrightness
         self.opticalInteriorContrast = opticalInteriorContrast
         self.opticalRimContrast = opticalRimContrast
         self.opticsLocked = opticsLocked
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case activeSNRDB
+        case activeRMSDBFS
+        case peakDBFS
+        case clippedSamples
+        case dominantPeakHz
+        case primaryPeakAmplitudeDB
+        case secondaryPeaksHz
+        case secondaryPeakAmplitudesDB
+        case spectralCentroidHz
+        case midToHighBandDB
+        case decaySlopeDBPerSec
+        case highFreqBubbleScatterDB
+        case spectralFlatness
+        case peakProminenceDB
+        case cavityMultipathDB
+        case subBandShapeDB
+        case echoReturnDB
+        case echoRMSDBFS
+        case tailSNRDB
+        case alignmentOffsetSamples
+        case echoArrivalDelayMs
+        case intraScanPersistenceRatio
+        case featureVectorChecksum
+        case opticalCenterBrightness
+        case opticalInteriorContrast
+        case opticalRimContrast
+        case opticsLocked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.activeSNRDB = try c.decode(Double.self, forKey: .activeSNRDB)
+        let actRMS = try c.decodeIfPresent(Double.self, forKey: .activeRMSDBFS) ?? -24.0
+        self.activeRMSDBFS = actRMS
+        self.peakDBFS = try c.decode(Double.self, forKey: .peakDBFS)
+        self.clippedSamples = try c.decode(Int.self, forKey: .clippedSamples)
+        self.dominantPeakHz = try c.decode(Double.self, forKey: .dominantPeakHz)
+        self.primaryPeakAmplitudeDB = try c.decodeIfPresent(Double.self, forKey: .primaryPeakAmplitudeDB) ?? actRMS
+        let secHz = try c.decodeIfPresent([Double].self, forKey: .secondaryPeaksHz) ?? []
+        self.secondaryPeaksHz = secHz
+        self.secondaryPeakAmplitudesDB = try c.decodeIfPresent([Double].self, forKey: .secondaryPeakAmplitudesDB) ?? []
+        self.spectralCentroidHz = try c.decode(Double.self, forKey: .spectralCentroidHz)
+        self.midToHighBandDB = try c.decode(Double.self, forKey: .midToHighBandDB)
+        self.decaySlopeDBPerSec = try c.decode(Double.self, forKey: .decaySlopeDBPerSec)
+        self.highFreqBubbleScatterDB = try c.decodeIfPresent(Double.self, forKey: .highFreqBubbleScatterDB) ?? -8.5
+        self.spectralFlatness = try c.decodeIfPresent(Double.self, forKey: .spectralFlatness) ?? 0.25
+        self.peakProminenceDB = try c.decodeIfPresent(Double.self, forKey: .peakProminenceDB) ?? 12.0
+        self.cavityMultipathDB = try c.decodeIfPresent(Double.self, forKey: .cavityMultipathDB) ?? -3.0
+        self.subBandShapeDB = try c.decodeIfPresent([Double].self, forKey: .subBandShapeDB) ?? [0, 0, 0, 0, 0, 0]
+        let echoRel = try c.decodeIfPresent(Double.self, forKey: .echoReturnDB) ?? -14.0
+        self.echoReturnDB = echoRel
+        self.echoRMSDBFS = try c.decodeIfPresent(Double.self, forKey: .echoRMSDBFS) ?? (actRMS + echoRel)
+        self.tailSNRDB = try c.decodeIfPresent(Double.self, forKey: .tailSNRDB) ?? 12.0
+        self.alignmentOffsetSamples = try c.decodeIfPresent(Int.self, forKey: .alignmentOffsetSamples) ?? 0
+        self.echoArrivalDelayMs = try c.decodeIfPresent(Double.self, forKey: .echoArrivalDelayMs) ?? 2.2
+        self.intraScanPersistenceRatio = try c.decodeIfPresent(Double.self, forKey: .intraScanPersistenceRatio) ?? 0.85
+        self.featureVectorChecksum = try c.decodeIfPresent(String.self, forKey: .featureVectorChecksum) ?? "00000000"
+        self.opticalCenterBrightness = try c.decodeIfPresent(Double.self, forKey: .opticalCenterBrightness) ?? 0.50
+        self.opticalInteriorContrast = try c.decodeIfPresent(Double.self, forKey: .opticalInteriorContrast) ?? 0.02
+        self.opticalRimContrast = try c.decodeIfPresent(Double.self, forKey: .opticalRimContrast) ?? 0.04
+        self.opticsLocked = try c.decodeIfPresent(Bool.self, forKey: .opticsLocked) ?? false
     }
 }
 
@@ -605,6 +742,16 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let scannedAt: Date
     public let scanSequenceNumber: Int?
+    public let batchRunID: String?
+    public let batchScanIndex: Int?
+    public let batchTotalCount: Int?
+    public let geometryCondition: String?
+    public let controlSeriesTag: String?
+    public let aeAfWbLockState: String?
+    public let targetLockState: String?
+    public let targetLockScore: Double?
+    public let gateDecision: String?
+    public let rejectionReason: String?
     public let status: ConsumerMatchStatus
     public let title: String
     public let formulaDisplay: String
@@ -630,6 +777,16 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         id: UUID = UUID(),
         scannedAt: Date = Date(),
         scanSequenceNumber: Int? = nil,
+        batchRunID: String? = nil,
+        batchScanIndex: Int? = nil,
+        batchTotalCount: Int? = nil,
+        geometryCondition: String? = nil,
+        controlSeriesTag: String? = nil,
+        aeAfWbLockState: String? = nil,
+        targetLockState: String? = nil,
+        targetLockScore: Double? = nil,
+        gateDecision: String? = nil,
+        rejectionReason: String? = nil,
         status: ConsumerMatchStatus,
         title: String,
         formulaDisplay: String,
@@ -654,6 +811,16 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         self.id = id
         self.scannedAt = scannedAt
         self.scanSequenceNumber = scanSequenceNumber
+        self.batchRunID = batchRunID
+        self.batchScanIndex = batchScanIndex
+        self.batchTotalCount = batchTotalCount
+        self.geometryCondition = geometryCondition
+        self.controlSeriesTag = controlSeriesTag
+        self.aeAfWbLockState = aeAfWbLockState
+        self.targetLockState = targetLockState
+        self.targetLockScore = targetLockScore
+        self.gateDecision = gateDecision
+        self.rejectionReason = rejectionReason
         self.status = status
         self.title = title
         self.formulaDisplay = formulaDisplay
@@ -674,5 +841,368 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         self.winningMargin = winningMargin
         self.allCandidateDistances = allCandidateDistances
         self.thumbnailJPEGData = thumbnailJPEGData
+    }
+}
+
+// MARK: - R1 (20x) Multi-Scan Spectral Peak-Stability Analyzer (Modal Integrity Only — Never Chemical Identity)
+
+/// Five-category modal classification for recurring candidate bands & noisy acquisitions across an N-scan series.
+public enum SpectralPeakBandCategory: String, Codable, Equatable, Sendable {
+    case persistentPeak = "PERSISTENT_PEAK"
+    case intermittentPeak = "INTERMITTENT_PEAK"
+    case likelyHarmonicOrSubharmonic = "LIKELY_HARMONIC_OR_SUBHARMONIC"
+    case isolatedTransientPeak = "ISOLATED_TRANSIENT_PEAK"
+}
+
+public struct TrackedSpectralBand: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { String(format: "%.1f_%@", centerMeanHz, category.rawValue) }
+    public let centerMeanHz: Double
+    public let centerSDHz: Double
+    public let minHz: Double
+    public let maxHz: Double
+    public let cvPercent: Double
+    public let presenceCount: Int
+    public let validScanCount: Int
+    public let primaryWinCount: Int
+    public let meanAmplitudeDB: Double
+    public let category: SpectralPeakBandCategory
+    public let harmonicRelationNote: String?
+
+    public var persistenceFraction: Double {
+        guard validScanCount > 0 else { return 0.0 }
+        return Double(presenceCount) / Double(validScanCount)
+    }
+
+    public init(
+        centerMeanHz: Double,
+        centerSDHz: Double,
+        minHz: Double,
+        maxHz: Double,
+        cvPercent: Double,
+        presenceCount: Int,
+        validScanCount: Int,
+        primaryWinCount: Int,
+        meanAmplitudeDB: Double,
+        category: SpectralPeakBandCategory,
+        harmonicRelationNote: String? = nil
+    ) {
+        self.centerMeanHz = centerMeanHz
+        self.centerSDHz = centerSDHz
+        self.minHz = minHz
+        self.maxHz = maxHz
+        self.cvPercent = cvPercent
+        self.presenceCount = presenceCount
+        self.validScanCount = validScanCount
+        self.primaryWinCount = primaryWinCount
+        self.meanAmplitudeDB = meanAmplitudeDB
+        self.category = category
+        self.harmonicRelationNote = harmonicRelationNote
+    }
+}
+
+public struct NoisyAcquisitionEntry: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { "\(scanSequenceNumber ?? 0)_\(batchScanIndex ?? 0)" }
+    public let scanSequenceNumber: Int?
+    public let batchScanIndex: Int?
+    public let measuredPeakHz: Double
+    public let activeSNRDB: Double
+    public let tailSNRDB: Double
+    public let reason: String
+
+    public init(
+        scanSequenceNumber: Int?,
+        batchScanIndex: Int?,
+        measuredPeakHz: Double,
+        activeSNRDB: Double,
+        tailSNRDB: Double,
+        reason: String
+    ) {
+        self.scanSequenceNumber = scanSequenceNumber
+        self.batchScanIndex = batchScanIndex
+        self.measuredPeakHz = measuredPeakHz
+        self.activeSNRDB = activeSNRDB
+        self.tailSNRDB = tailSNRDB
+        self.reason = reason
+    }
+}
+
+public struct RepeatabilityPeakStabilityReport: Codable, Equatable, Sendable {
+    public let totalAcquisitions: Int
+    public let validQualityAcquisitions: Int
+    public let primaryPeakMeanHz: Double
+    public let primaryPeakSDHz: Double
+    public let primaryPeakCVPercent: Double
+    public let primaryPeakMinHz: Double
+    public let primaryPeakMaxHz: Double
+    public let persistentBands: [TrackedSpectralBand]
+    public let intermittentBands: [TrackedSpectralBand]
+    public let harmonicOrSubharmonicBands: [TrackedSpectralBand]
+    public let isolatedTransientBands: [TrackedSpectralBand]
+    public let lowConfidenceNoisyScans: [NoisyAcquisitionEntry]
+    public let stabilityDisposition: String
+
+    public init(
+        totalAcquisitions: Int,
+        validQualityAcquisitions: Int,
+        primaryPeakMeanHz: Double,
+        primaryPeakSDHz: Double,
+        primaryPeakCVPercent: Double,
+        primaryPeakMinHz: Double,
+        primaryPeakMaxHz: Double,
+        persistentBands: [TrackedSpectralBand],
+        intermittentBands: [TrackedSpectralBand],
+        harmonicOrSubharmonicBands: [TrackedSpectralBand],
+        isolatedTransientBands: [TrackedSpectralBand],
+        lowConfidenceNoisyScans: [NoisyAcquisitionEntry],
+        stabilityDisposition: String
+    ) {
+        self.totalAcquisitions = totalAcquisitions
+        self.validQualityAcquisitions = validQualityAcquisitions
+        self.primaryPeakMeanHz = primaryPeakMeanHz
+        self.primaryPeakSDHz = primaryPeakSDHz
+        self.primaryPeakCVPercent = primaryPeakCVPercent
+        self.primaryPeakMinHz = primaryPeakMinHz
+        self.primaryPeakMaxHz = primaryPeakMaxHz
+        self.persistentBands = persistentBands
+        self.intermittentBands = intermittentBands
+        self.harmonicOrSubharmonicBands = harmonicOrSubharmonicBands
+        self.isolatedTransientBands = isolatedTransientBands
+        self.lowConfidenceNoisyScans = lowConfidenceNoisyScans
+        self.stabilityDisposition = stabilityDisposition
+    }
+}
+
+public enum RepeatabilityPeakStabilityAnalyzer {
+    private struct PeakObservation {
+        let scanIdx: Int
+        let freqHz: Double
+        let ampDB: Double
+        let isPrimary: Bool
+    }
+
+    private struct MutableCluster {
+        var observations: [PeakObservation]
+        var meanHz: Double {
+            guard !observations.isEmpty else { return 0.0 }
+            return observations.reduce(0.0) { $0 + $1.freqHz } / Double(observations.count)
+        }
+    }
+
+    /// Evaluates spectral peak persistence across a fixed-geometry scan series without assigning chemical identity.
+    public static func analyze(items: [ConsumerScanItem]) -> RepeatabilityPeakStabilityReport {
+        var noisyEntries: [NoisyAcquisitionEntry] = []
+        var validItems: [(idx: Int, item: ConsumerScanItem)] = []
+
+        for (offset, item) in items.enumerated() {
+            let feat = item.measuredFeatures
+            let actSNR = feat?.activeSNRDB ?? 0.0
+            let tailSNR = feat?.tailSNRDB ?? 12.0
+            let clipped = feat?.clippedSamples ?? 0
+
+            if item.status == .unclearScan || clipped > 8 || (feat != nil && actSNR < 1.8) || (feat != nil && tailSNR < 2.2) {
+                let reason = item.rejectionReason ?? (
+                    clipped > 8 ? "CLIPPING (\(clipped) samples)" :
+                    actSNR < 1.8 ? String(format: "LOW_ACTIVE_SNR (%.1f dB)", actSNR) :
+                    tailSNR < 2.2 ? String(format: "LOW_TAIL_SNR (%.1f dB)", tailSNR) :
+                    "INVALID_MEASUREMENT"
+                )
+                noisyEntries.append(
+                    NoisyAcquisitionEntry(
+                        scanSequenceNumber: item.scanSequenceNumber,
+                        batchScanIndex: item.batchScanIndex ?? (offset + 1),
+                        measuredPeakHz: item.measuredPeakHz,
+                        activeSNRDB: actSNR,
+                        tailSNRDB: tailSNR,
+                        reason: reason
+                    )
+                )
+            } else if item.status != .nonLiquidMaterial {
+                validItems.append((offset, item))
+            }
+        }
+
+        let validCount = validItems.count
+        let primaryPeaks = validItems.map { $0.item.measuredPeakHz }
+        let (pkMean, pkSD, pkMin, pkMax) = Self.basicStats(primaryPeaks)
+        let pkCV = pkMean > 1e-6 ? (100.0 * pkSD / pkMean) : 0.0
+
+        // Gather primary + secondary candidate peaks per valid scan
+        var allObs: [PeakObservation] = []
+        for (scanKey, item) in validItems {
+            let f = item.measuredFeatures
+            let pAmp = f?.primaryPeakAmplitudeDB ?? f?.activeRMSDBFS ?? -30.0
+            allObs.append(PeakObservation(scanIdx: scanKey, freqHz: item.measuredPeakHz, ampDB: pAmp, isPrimary: true))
+
+            if let secHz = f?.secondaryPeaksHz {
+                let secAmps = f?.secondaryPeakAmplitudesDB ?? []
+                for (k, hz) in secHz.enumerated() where hz > 100.0 {
+                    let sAmp = k < secAmps.count ? secAmps[k] : (pAmp - 4.0)
+                    allObs.append(PeakObservation(scanIdx: scanKey, freqHz: hz, ampDB: sAmp, isPrimary: false))
+                }
+            }
+        }
+
+        // Greedy agglomerative clustering into recurring frequency bands (tolerance max(75 Hz, 4.0% of center))
+        let sortedObs = allObs.sorted { $0.freqHz < $1.freqHz }
+        var clusters: [MutableCluster] = []
+        for obs in sortedObs {
+            var bestIdx: Int?
+            var bestDist = Double.infinity
+            for (cIdx, cluster) in clusters.enumerated() {
+                // Only one peak per scan can belong to a given modal band
+                if cluster.observations.contains(where: { $0.scanIdx == obs.scanIdx }) { continue }
+                let center = cluster.meanHz
+                let tol = max(75.0, 0.040 * center)
+                let dist = abs(obs.freqHz - center)
+                if dist <= tol && dist < bestDist {
+                    bestDist = dist
+                    bestIdx = cIdx
+                }
+            }
+            if let idx = bestIdx {
+                clusters[idx].observations.append(obs)
+            } else {
+                clusters.append(MutableCluster(observations: [obs]))
+            }
+        }
+
+        // Identify persistent core bands first (>= 60% presence & CV <= 4.5%) to check harmonic/subharmonic ratios
+        struct RawBandStats {
+            let meanHz: Double
+            let sdHz: Double
+            let minHz: Double
+            let maxHz: Double
+            let cvPct: Double
+            let presence: Int
+            let primaryWins: Int
+            let meanAmpDB: Double
+            let fraction: Double
+        }
+
+        let rawBands: [RawBandStats] = clusters.map { c in
+            let freqs = c.observations.map(\.freqHz)
+            let (m, sd, mn, mx) = Self.basicStats(freqs)
+            let cv = m > 1e-6 ? (100.0 * sd / m) : 0.0
+            let pres = Set(c.observations.map(\.scanIdx)).count
+            let wins = c.observations.filter(\.isPrimary).count
+            let meanAmp = c.observations.reduce(0.0) { $0 + $1.ampDB } / Double(max(1, c.observations.count))
+            let frac = validCount > 0 ? Double(pres) / Double(validCount) : 0.0
+            return RawBandStats(
+                meanHz: m, sdHz: sd, minHz: mn, maxHz: mx, cvPct: cv,
+                presence: pres, primaryWins: wins, meanAmpDB: meanAmp, fraction: frac
+            )
+        }.sorted {
+            if $0.presence != $1.presence { return $0.presence > $1.presence }
+            return $0.meanAmpDB > $1.meanAmpDB
+        }
+
+        let persistentAnchors = rawBands.filter { $0.fraction >= 0.60 && $0.cvPct <= 4.5 }
+
+        var persistentOut: [TrackedSpectralBand] = []
+        var intermittentOut: [TrackedSpectralBand] = []
+        var harmonicOut: [TrackedSpectralBand] = []
+        var transientOut: [TrackedSpectralBand] = []
+
+        for band in rawBands {
+            var harmonicNote: String?
+            for anchor in persistentAnchors where abs(anchor.meanHz - band.meanHz) > 120.0 {
+                // Only classify the weaker or secondary-winning mode as harmonic/subharmonic of the dominant persistent mode
+                let anchorDominates = (anchor.primaryWins > band.primaryWins) ||
+                    (anchor.primaryWins == band.primaryWins && anchor.meanAmpDB >= band.meanAmpDB)
+                guard anchorDominates else { continue }
+
+                let ratio = band.meanHz / max(1.0, anchor.meanHz)
+                for mult in [2, 3, 4] {
+                    if abs(ratio - Double(mult)) <= (0.042 * Double(mult)) {
+                        harmonicNote = String(format: "%dx harmonic of %.0f Hz (ratio %.2f)", mult, anchor.meanHz, ratio)
+                        break
+                    }
+                }
+                if harmonicNote == nil {
+                    for div in [2, 3] {
+                        let target = 1.0 / Double(div)
+                        if abs(ratio - target) <= (0.042 * target) {
+                            harmonicNote = String(format: "1/%d subharmonic of %.0f Hz (ratio %.2f)", div, anchor.meanHz, ratio)
+                            break
+                        }
+                    }
+                }
+                if harmonicNote != nil { break }
+            }
+
+            let isIsolated = (validCount >= 5) ? (band.presence <= 1 || band.fraction < 0.15) : (band.presence == 1 && validCount >= 3)
+            let category: SpectralPeakBandCategory
+            if harmonicNote != nil && !(band.primaryWins > validCount / 2 && band.fraction >= 0.75) {
+                category = .likelyHarmonicOrSubharmonic
+            } else if band.fraction >= 0.60 && band.cvPct <= 4.5 {
+                category = .persistentPeak
+            } else if isIsolated {
+                category = .isolatedTransientPeak
+            } else {
+                category = .intermittentPeak
+            }
+
+            let tracked = TrackedSpectralBand(
+                centerMeanHz: band.meanHz,
+                centerSDHz: band.sdHz,
+                minHz: band.minHz,
+                maxHz: band.maxHz,
+                cvPercent: band.cvPct,
+                presenceCount: band.presence,
+                validScanCount: validCount,
+                primaryWinCount: band.primaryWins,
+                meanAmplitudeDB: band.meanAmpDB,
+                category: category,
+                harmonicRelationNote: harmonicNote
+            )
+
+            switch category {
+            case .persistentPeak:
+                persistentOut.append(tracked)
+            case .intermittentPeak:
+                intermittentOut.append(tracked)
+            case .likelyHarmonicOrSubharmonic:
+                harmonicOut.append(tracked)
+            case .isolatedTransientPeak:
+                transientOut.append(tracked)
+            }
+        }
+
+        let disposition: String
+        if validCount < 2 {
+            disposition = "INSUFFICIENT_VALID_ACQUISITIONS"
+        } else if !persistentOut.isEmpty && pkCV <= 3.5 {
+            disposition = "REPEATABLE_PERSISTENT_MODE"
+        } else if persistentOut.count >= 1 && pkCV > 8.0 {
+            disposition = "COMPETING_PEAK_REGIMES"
+        } else {
+            disposition = "UNSTABLE_SPECTRAL_SCATTER"
+        }
+
+        return RepeatabilityPeakStabilityReport(
+            totalAcquisitions: items.count,
+            validQualityAcquisitions: validCount,
+            primaryPeakMeanHz: pkMean,
+            primaryPeakSDHz: pkSD,
+            primaryPeakCVPercent: pkCV,
+            primaryPeakMinHz: pkMin,
+            primaryPeakMaxHz: pkMax,
+            persistentBands: persistentOut,
+            intermittentBands: intermittentOut,
+            harmonicOrSubharmonicBands: harmonicOut,
+            isolatedTransientBands: transientOut,
+            lowConfidenceNoisyScans: noisyEntries,
+            stabilityDisposition: disposition
+        )
+    }
+
+    private static func basicStats(_ values: [Double]) -> (mean: Double, sd: Double, min: Double, max: Double) {
+        guard !values.isEmpty else { return (0, 0, 0, 0) }
+        let n = Double(values.count)
+        let mean = values.reduce(0.0, +) / n
+        let variance = values.count > 1
+            ? values.reduce(0.0) { $0 + ($1 - mean) * ($1 - mean) } / (n - 1.0)
+            : 0.0
+        return (mean, sqrt(max(0.0, variance)), values.min() ?? mean, values.max() ?? mean)
     }
 }

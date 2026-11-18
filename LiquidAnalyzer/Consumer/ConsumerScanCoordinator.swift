@@ -60,11 +60,14 @@ public final class ConsumerScanCoordinator: ObservableObject {
     @Published public var autoPlayTunePreview: Bool = true
     @Published public var autoScanWhenSteady: Bool = true
     @Published public var hapticsEnabled: Bool = true
+    @Published public var selectedGeometryCondition: GeometryTestCondition = .stationary15InBaseline
+    @Published public var selectedControlSeriesTag: ControlSeriesTag = .unlabeledBlind
     @Published public var isResearchConsolePresented: Bool = false
 
     public private(set) var isConfiguringSession: Bool = false
     public let cameraService: CameraTargetingService
     public let tunePlayer: ChemicalTunePlayer
+    public let warmAudioEngine = WarmBatchAudioEngine()
 
     private let researchCoordinator: AcquisitionCoordinator
     private let classifier: OnDeviceAcousticClassifier
@@ -88,7 +91,9 @@ public final class ConsumerScanCoordinator: ObservableObject {
         self.classifier = classifier
         let resolvedStore = historyStore ?? ConsumerHistoryStore()
         self.historyStore = resolvedStore
-        self.history = resolvedStore.loadAll()
+        let loadedHistory = resolvedStore.loadAll()
+        self.history = loadedHistory
+        self.consumerScanCounter = max(loadedHistory.compactMap(\.scanSequenceNumber).max() ?? 0, loadedHistory.count)
         let resolvedProtoStore = prototypeStore ?? CalibratedPrototypeStore()
         self.prototypeStore = resolvedProtoStore
         self.calibratedPrototypes = resolvedProtoStore.loadAll()
@@ -96,7 +101,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
         resolvedCam.onAutoTargetLocked = { [weak self] in
             guard let self, self.autoScanWhenSteady, case .aim = self.flowStep else { return }
             self.triggerLightHaptic()
-            self.beginScan()
+            self.beginScan(isAutoTriggered: true)
         }
     }
 
@@ -117,7 +122,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
         flowStep = .home
     }
 
-    public func beginScan() {
+    public func beginScan(isAutoTriggered: Bool = false) {
         guard activeScanTask == nil else { return }
         tunePlayer.stop()
         consumerAlertMessage = nil
@@ -126,7 +131,9 @@ public final class ConsumerScanCoordinator: ObservableObject {
         // Grab latest silent preview thumbnail + full wide-angle scene frame + camera lock state BEFORE stopping AIM
         let thumbnailData = cameraService.latestTargetingThumbnail()
         let sceneContextData = cameraService.latestSceneContextJPEG()
-        let opticsLocked = cameraService.isOpticsLocked
+        let lockSnapshot = cameraService.captureLockSnapshot(isAutoTriggered: isAutoTriggered, isControlledBatch: false)
+        let geometryTag = selectedGeometryCondition.rawValue
+        let controlTag = selectedControlSeriesTag.rawValue
         cameraService.stopCamera()
 
         scanProgress = 0.08
@@ -139,7 +146,9 @@ public final class ConsumerScanCoordinator: ObservableObject {
             await self.runAutomatedConsumerScan(
                 thumbnailData: thumbnailData,
                 sceneContextData: sceneContextData,
-                opticsLocked: opticsLocked,
+                lockSnapshot: lockSnapshot,
+                geometryCondition: geometryTag,
+                controlSeriesTag: controlTag,
                 batchTotalCount: 1
             )
             self.activeScanTask = nil
@@ -147,30 +156,37 @@ public final class ConsumerScanCoordinator: ObservableObject {
     }
 
     /// Runs a hands-free N-scan untouched Repeatability Gate R1 sequence (default 20 scans)
-    /// using the locked camera frame and `.measurement` mode bottom microphone.
+    /// locking AE/AF/WB on the reference frame, keeping a single warm measurement-mode `AVAudioEngine`,
+    /// and preserving every individual acquisition (including quality-gate rejections) without silent drops.
     public func startRepeatabilityGateR1Batch(count: Int = 20) {
         guard activeScanTask == nil else { return }
         tunePlayer.stop()
         consumerAlertMessage = nil
         triggerLightHaptic()
 
-        let thumbnailData = cameraService.latestTargetingThumbnail()
-        let sceneContextData = cameraService.latestSceneContextJPEG()
-        let opticsLocked = cameraService.isOpticsLocked
-        cameraService.stopCamera()
-
         let targetN = max(2, min(30, count))
+        let geometryTag = selectedGeometryCondition.rawValue
+        let controlTag = selectedControlSeriesTag.rawValue
+
         scanProgress = 0.04
         scanningStatusTitle = "Repeatability Gate R1 (1 / \(targetN))"
-        scanningStatusSubtitle = "Keep phone & glass completely untouched"
+        scanningStatusSubtitle = "Locking optics • Keep phone & target untouched"
         flowStep = .scanning
 
         activeScanTask = Task { [weak self] in
             guard let self else { return }
+            _ = await self.cameraService.lockOpticsForControlledBatchIfLive()
+            let thumbnailData = self.cameraService.latestTargetingThumbnail()
+            let sceneContextData = self.cameraService.latestSceneContextJPEG()
+            let lockSnapshot = self.cameraService.captureLockSnapshot(isAutoTriggered: false, isControlledBatch: true)
+            self.cameraService.stopCamera()
+
             await self.runAutomatedConsumerScan(
                 thumbnailData: thumbnailData,
                 sceneContextData: sceneContextData,
-                opticsLocked: opticsLocked,
+                lockSnapshot: lockSnapshot,
+                geometryCondition: geometryTag,
+                controlSeriesTag: controlTag,
                 batchTotalCount: targetN
             )
             self.activeScanTask = nil
@@ -181,6 +197,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
         guard !isConfiguringSession else { return }
         activeScanTask?.cancel()
         activeScanTask = nil
+        warmAudioEngine.stopWarmBatchEngine()
         Task {
             await researchCoordinator.audioEngine.abortImmediately()
         }
@@ -212,12 +229,13 @@ public final class ConsumerScanCoordinator: ObservableObject {
         historyStore.saveAll([])
     }
 
-    /// Exports all recorded history items with full Repeatability Gate R1 telemetry to a shareable CSV file.
-    public func exportRepeatabilityCSVURL() -> URL? {
-        guard !history.isEmpty else { return nil }
-        let ordered = Array(history.reversed())
+    /// Exports recorded items (either a single geometry/batch cohort or full history) with complete Repeatability Gate R1 telemetry.
+    public func exportRepeatabilityCSVURL(items subset: [ConsumerScanItem]? = nil, filenameSuffix: String = "all") -> URL? {
+        let source = subset ?? history
+        guard !source.isEmpty else { return nil }
+        let ordered = Array(source.reversed())
         var lines: [String] = [
-            "scan_num,timestamp_iso,final_status,final_classification,primary_peak_hz,secondary_peaks_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_return_db,hf_scatter_db,container_centroid_hz,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores"
+            "scan_num,batch_run_id,batch_index,batch_total,timestamp_iso,geometry_condition,control_series_tag,ae_af_wb_lock_state,target_lock_state,target_lock_score,final_status,gate_decision,rejection_reason,final_classification,primary_peak_hz,primary_peak_db,secondary_peaks_hz,secondary_peaks_db,intra_scan_persistence,container_centroid_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_rms_dbfs,echo_return_db,tail_snr_db,alignment_offset_samples,echo_arrival_delay_ms,hf_scatter_db,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores"
         ]
         let isoFmt = ISO8601DateFormatter()
         for (idx, item) in ordered.enumerated() {
@@ -225,21 +243,39 @@ public final class ConsumerScanCoordinator: ObservableObject {
             let iso = isoFmt.string(from: item.scannedAt)
             let f = item.measuredFeatures
             let secPeaks = f?.secondaryPeaksHz.map { String(format: "%.1f", $0) }.joined(separator: ";") ?? ""
+            let secAmps = f?.secondaryPeakAmplitudesDB.map { String(format: "%.2f", $0) }.joined(separator: ";") ?? ""
             let subBands = f?.subBandShapeDB.map { String(format: "%+.2f", $0) }.joined(separator: ";") ?? ""
             let allScores = item.allCandidateDistances?.map { "\($0.profileID):\(String(format: "%.3f", $0.distance))" }.joined(separator: ";") ?? ""
             let row = [
                 "\(seq)",
+                Self.csvEscape(item.batchRunID ?? ""),
+                item.batchScanIndex.map { "\($0)" } ?? "1",
+                item.batchTotalCount.map { "\($0)" } ?? "1",
                 iso,
+                Self.csvEscape(item.geometryCondition ?? GeometryTestCondition.handheldGeneral.rawValue),
+                Self.csvEscape(item.controlSeriesTag ?? ControlSeriesTag.unlabeledBlind.rawValue),
+                Self.csvEscape(item.aeAfWbLockState ?? ""),
+                Self.csvEscape(item.targetLockState ?? ""),
+                item.targetLockScore.map { String(format: "%.2f", $0) } ?? "",
                 item.status.rawValue,
+                Self.csvEscape(item.gateDecision ?? ""),
+                Self.csvEscape(item.rejectionReason ?? ""),
                 Self.csvEscape(item.title),
                 String(format: "%.2f", item.measuredPeakHz),
+                String(format: "%.2f", f?.primaryPeakAmplitudeDB ?? 0.0),
                 Self.csvEscape(secPeaks),
+                Self.csvEscape(secAmps),
+                String(format: "%.3f", f?.intraScanPersistenceRatio ?? 0.0),
+                String(format: "%.2f", item.measuredCentroidHz),
                 String(format: "%.2f", f?.activeRMSDBFS ?? 0.0),
                 String(format: "%.2f", f?.peakDBFS ?? 0.0),
                 String(format: "%.2f", f?.activeSNRDB ?? 0.0),
+                String(format: "%.2f", f?.echoRMSDBFS ?? 0.0),
                 String(format: "%.2f", f?.echoReturnDB ?? 0.0),
+                String(format: "%.2f", f?.tailSNRDB ?? 0.0),
+                "\(f?.alignmentOffsetSamples ?? 0)",
+                String(format: "%.2f", f?.echoArrivalDelayMs ?? 0.0),
                 String(format: "%.2f", f?.highFreqBubbleScatterDB ?? 0.0),
-                String(format: "%.2f", item.measuredCentroidHz),
                 String(format: "%.2f", item.measuredDecayDBPerSec),
                 String(format: "%.2f", f?.cavityMultipathDB ?? 0.0),
                 f?.featureVectorChecksum ?? "",
@@ -254,7 +290,8 @@ public final class ConsumerScanCoordinator: ObservableObject {
             lines.append(row)
         }
         let csvContent = lines.joined(separator: "\n") + "\n"
-        let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("repeatability_gate_r1.csv")
+        let safeSuffix = filenameSuffix.replacingOccurrences(of: " ", with: "_")
+        let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("repeatability_gate_r1_\(safeSuffix).csv")
         try? csvContent.data(using: .utf8)?.write(to: outURL, options: .atomic)
         return outURL
     }
@@ -285,6 +322,17 @@ public final class ConsumerScanCoordinator: ObservableObject {
             updatedItem = ConsumerScanItem(
                 id: item.id,
                 scannedAt: item.scannedAt,
+                scanSequenceNumber: item.scanSequenceNumber,
+                batchRunID: item.batchRunID,
+                batchScanIndex: item.batchScanIndex,
+                batchTotalCount: item.batchTotalCount,
+                geometryCondition: item.geometryCondition,
+                controlSeriesTag: item.controlSeriesTag,
+                aeAfWbLockState: item.aeAfWbLockState,
+                targetLockState: item.targetLockState,
+                targetLockScore: item.targetLockScore,
+                gateDecision: "CALIBRATED_EMPTY_CONTAINER",
+                rejectionReason: nil,
                 status: .emptyContainer,
                 title: "Empty Container",
                 formulaDisplay: "Calibrated Empty Glass Control",
@@ -301,12 +349,23 @@ public final class ConsumerScanCoordinator: ObservableObject {
             )
             history.removeAll { $0.id == item.id }
             history.insert(updatedItem, at: 0)
-            if history.count > 50 { history = Array(history.prefix(50)) }
+            if history.count > 500 { history = Array(history.prefix(500)) }
             historyStore.saveAll(history)
         } else if targetID == CalibratedAcousticPrototype.solidSurfaceTargetID {
             updatedItem = ConsumerScanItem(
                 id: item.id,
                 scannedAt: item.scannedAt,
+                scanSequenceNumber: item.scanSequenceNumber,
+                batchRunID: item.batchRunID,
+                batchScanIndex: item.batchScanIndex,
+                batchTotalCount: item.batchTotalCount,
+                geometryCondition: item.geometryCondition,
+                controlSeriesTag: item.controlSeriesTag,
+                aeAfWbLockState: item.aeAfWbLockState,
+                targetLockState: item.targetLockState,
+                targetLockScore: item.targetLockScore,
+                gateDecision: "CALIBRATED_SOLID_SURFACE",
+                rejectionReason: nil,
                 status: .nonLiquidMaterial,
                 title: "Solid / Non-Liquid Material",
                 formulaDisplay: "Calibrated Surface Standard",
@@ -325,6 +384,17 @@ public final class ConsumerScanCoordinator: ObservableObject {
             updatedItem = ConsumerScanItem(
                 id: item.id,
                 scannedAt: item.scannedAt,
+                scanSequenceNumber: item.scanSequenceNumber,
+                batchRunID: item.batchRunID,
+                batchScanIndex: item.batchScanIndex,
+                batchTotalCount: item.batchTotalCount,
+                geometryCondition: item.geometryCondition,
+                controlSeriesTag: item.controlSeriesTag,
+                aeAfWbLockState: item.aeAfWbLockState,
+                targetLockState: item.targetLockState,
+                targetLockScore: item.targetLockScore,
+                gateDecision: "CALIBRATED_KNOWN_STANDARD",
+                rejectionReason: nil,
                 status: .referenceMatch,
                 title: profile.displayName,
                 formulaDisplay: profile.formulaDisplay,
@@ -341,7 +411,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
             )
             history.removeAll { $0.id == item.id }
             history.insert(updatedItem, at: 0)
-            if history.count > 50 { history = Array(history.prefix(50)) }
+            if history.count > 500 { history = Array(history.prefix(500)) }
             historyStore.saveAll(history)
         } else {
             return
@@ -355,107 +425,134 @@ public final class ConsumerScanCoordinator: ObservableObject {
     private func runAutomatedConsumerScan(
         thumbnailData: Data?,
         sceneContextData: Data?,
-        opticsLocked: Bool,
+        lockSnapshot: CameraLockSnapshot,
+        geometryCondition: String,
+        controlSeriesTag: String,
         batchTotalCount: Int
     ) async {
         let protocolConfig = researchCoordinator.protocolConfiguration
         let waveformRepo = researchCoordinator.waveformRepository
-        let audioSession = researchCoordinator.audioSession
-        let audioEngine = researchCoordinator.audioEngine
         let timing = researchCoordinator.timing
         let store = researchCoordinator.store
+        let targetCount = max(1, batchTotalCount)
+
+        let slugFmt = DateFormatter()
+        slugFmt.locale = Locale(identifier: "en_US_POSIX")
+        slugFmt.dateFormat = "yyyyMMdd_HHmmss"
+        let slug = slugFmt.string(from: Date())
+        let batchRunID = targetCount > 1 ? "R1_\(targetCount)X_\(slug)" : "SINGLE_\(slug)"
 
         do {
             try await store.verifySufficientStorage()
             try waveformRepo.verifyAllAssets()
             if Task.isCancelled { return }
-            scanProgress = batchTotalCount > 1 ? 0.06 : 0.22
+            scanProgress = targetCount > 1 ? 0.06 : 0.22
 
+            let assetMeta = try waveformRepo.assetMetadata(assetID: "SIG_ESS_v1")
+            let excitationURL = try waveformRepo.assetURL(assetID: "SIG_ESS_v1")
+            let inverseURL = try? waveformRepo.assetURL(assetID: "SIG_ESS_v1_inverse")
+            let initialWaveform = try waveformRepo.audioFile(assetID: "SIG_ESS_v1")
+
+            warmAudioEngine.stopWarmBatchEngine()
             isConfiguringSession = true
-            let sessionInfo: (sampleRateHz: Double, outputVolume: Float)
+            let routeSnapshot: WarmBatchAudioEngine.RouteSnapshot
             do {
-                sessionInfo = try await audioSession.configureForConsumerScan()
+                routeSnapshot = try await warmAudioEngine.startWarmBatchEngine(
+                    waveformFormat: initialWaveform.processingFormat
+                )
                 isConfiguringSession = false
+            } catch WarmAudioEngineError.mutedOutputVolume {
+                isConfiguringSession = false
+                warmAudioEngine.stopWarmBatchEngine()
+                flowStep = .aim
+                scanProgress = 0.0
+                consumerAlertMessage = "Your device volume is muted. Please press Volume Up slightly so Liquid Analyzer can play its acoustic test sound."
+                return
             } catch {
                 isConfiguringSession = false
                 throw error
             }
 
-            if sessionInfo.outputVolume < 0.03 {
-                flowStep = .aim
-                scanProgress = 0.0
-                consumerAlertMessage = "Your iPhone volume is muted. Please press the Volume Up button slightly so Liquid Analyzer can play its acoustic test sound."
-                return
-            }
-
-            let assetMeta = try waveformRepo.assetMetadata(assetID: "SIG_ESS_v1")
-            let inverseURL = try? waveformRepo.assetURL(assetID: "SIG_ESS_v1_inverse")
+            let actualRate = routeSnapshot.sampleRate > 0 ? routeSnapshot.sampleRate : 48_000.0
+            let preRollMs = max(180, protocolConfig.preRollMs)
+            let postRollMs = max(180, protocolConfig.postRollMs)
             var lastResultItem: ConsumerScanItem?
 
-            for batchIdx in 1...max(1, batchTotalCount) {
-                if Task.isCancelled { return }
-                if batchTotalCount > 1 {
-                    scanningStatusTitle = "Repeatability Gate R1 (\(batchIdx) / \(batchTotalCount))"
-                    scanningStatusSubtitle = "Do not move phone or glass between sweeps"
-                    scanProgress = Double(batchIdx - 1) / Double(batchTotalCount)
+            for batchIdx in 1...targetCount {
+                if Task.isCancelled {
+                    warmAudioEngine.stopWarmBatchEngine()
+                    return
+                }
+                if targetCount > 1 {
+                    scanningStatusTitle = "Repeatability Gate R1 (\(batchIdx) / \(targetCount))"
+                    scanningStatusSubtitle = "Keep device & target untouched (\(geometryCondition == GeometryTestCondition.stationary15InBaseline.rawValue ? "15-in Baseline" : "Fixed Geometry"))"
+                    scanProgress = Double(batchIdx - 1) / Double(targetCount)
                 }
 
-                let remainingCooldownMs = timing.remainingCooldownMilliseconds
-                if remainingCooldownMs > 0 {
-                    try await timing.sleepMilliseconds(min(remainingCooldownMs, 2_050))
+                if batchIdx == 1 {
+                    let remainingCooldownMs = timing.remainingCooldownMilliseconds
+                    if remainingCooldownMs > 0 {
+                        try await timing.sleepMilliseconds(min(remainingCooldownMs, 2_050))
+                    }
+                } else {
+                    // Deterministic quiet acoustic ring-down & room decay settle between R1 sweeps on warm engine
+                    try await timing.sleepMilliseconds(650)
                 }
-                if Task.isCancelled { return }
-                if batchTotalCount == 1 { scanProgress = 0.38 }
+
+                if Task.isCancelled {
+                    warmAudioEngine.stopWarmBatchEngine()
+                    return
+                }
+                if targetCount == 1 { scanProgress = 0.38 }
 
                 consumerScanCounter += 1
                 let currentSeq = consumerScanCounter
                 let sessionID = "CONSUMER_SESS"
-                let sampleID = String(format: "SCAN_%04d", currentSeq + history.count)
+                let sampleID = String(format: "SCAN_%04d", currentSeq)
                 let tempURL = try await store.temporaryRecordingURL(
                     sessionID: sessionID,
                     sampleID: sampleID,
-                    repetition: 1
+                    repetition: batchIdx
                 )
 
-                let waveformFile = try waveformRepo.audioFile(assetID: "SIG_ESS_v1")
-                let actualRate = try await audioEngine.prepare(
-                    waveform: waveformFile,
-                    destinationURL: tempURL,
-                    expectedSampleRateHz: sessionInfo.sampleRateHz,
-                    enforceExactSampleRate: false
-                )
-                try await audioEngine.start()
+                // Verify audio route & mic data source remain strictly unchanged before opening RAM segment
+                try warmAudioEngine.validateRouteUnchanged()
+                try warmAudioEngine.openSweepRecording()
 
-                try await timing.sleepMilliseconds(protocolConfig.preRollMs)
+                try await timing.sleepMilliseconds(preRollMs)
                 if Task.isCancelled {
-                    await audioEngine.abortImmediately()
+                    warmAudioEngine.stopWarmBatchEngine()
                     return
                 }
-                if batchTotalCount == 1 { scanProgress = 0.56 }
+                if targetCount == 1 { scanProgress = 0.56 }
 
-                let playTimes = await audioEngine.playExcitation(waveform: waveformFile)
-                if batchTotalCount == 1 { scanProgress = 0.78 }
+                let playTimes = try await warmAudioEngine.playSweep(fileURL: excitationURL)
+                if targetCount == 1 { scanProgress = 0.78 }
 
-                try await timing.sleepMilliseconds(protocolConfig.postRollMs)
-                _ = try await audioEngine.stopAndFinalizeRecording()
+                try await timing.sleepMilliseconds(postRollMs)
+                let capturedSamples = try warmAudioEngine.closeSweepRecording()
+                timing.recordExcitationCompleted(atUptime: playTimes.endUptimeSeconds)
 
-                Task {
-                    try? await timing.runCooldown(
-                        fromExcitationEndUptime: playTimes.endUptimeSeconds,
-                        cooldownMs: protocolConfig.cooldownMs
-                    )
-                }
+                // Archive lossless Float32 WAV to disk outside the real-time capture window
+                try WarmBatchAudioEngine.writeLosslessMonoWAV(
+                    samples: capturedSamples,
+                    sampleRateHz: actualRate,
+                    to: tempURL
+                )
 
                 let committed = try await store.commitRecordingFile(
                     temporaryURL: tempURL,
                     sessionID: sessionID,
                     sampleID: sampleID,
-                    repetition: 1
+                    repetition: batchIdx
                 )
-                if Task.isCancelled { return }
-                if batchTotalCount == 1 { scanProgress = 0.92 }
+                if Task.isCancelled {
+                    warmAudioEngine.stopWarmBatchEngine()
+                    return
+                }
+                if targetCount == 1 { scanProgress = 0.92 }
 
-                let preRollFrames = Int(round(Double(protocolConfig.preRollMs) * actualRate / 1_000.0))
+                let preRollFrames = Int(round(Double(preRollMs) * actualRate / 1_000.0))
                 let activeFrames = Int(round(Double(assetMeta.durationMs) * actualRate / 1_000.0))
 
                 let resultItem = try classifier.analyzeAndClassify(
@@ -465,29 +562,36 @@ public final class ConsumerScanCoordinator: ObservableObject {
                     activeFrames: activeFrames,
                     clippingCeilingDBFS: protocolConfig.clippingCeilingDBFS,
                     scanSequenceNumber: currentSeq,
+                    batchRunID: batchRunID,
+                    batchScanIndex: batchIdx,
+                    batchTotalCount: targetCount,
+                    geometryCondition: geometryCondition,
+                    controlSeriesTag: controlSeriesTag,
+                    aeAfWbLockState: lockSnapshot.aeAfWbLockState,
+                    targetLockState: lockSnapshot.targetLockState,
+                    targetLockScore: lockSnapshot.targetLockScore,
                     thumbnailJPEGData: thumbnailData,
                     sceneContextJPEGData: sceneContextData,
-                    opticsLocked: opticsLocked,
+                    opticsLocked: lockSnapshot.opticsLocked,
                     calibratedPrototypes: calibratedPrototypes
                 )
 
-                // Record every scan in R1 batch (or any valid single scan) into History for full R1 variance audit
-                if batchTotalCount > 1 || (resultItem.status != .unclearScan && resultItem.status != .nonLiquidMaterial) {
-                    history.insert(resultItem, at: 0)
-                    if history.count > 60 {
-                        history = Array(history.prefix(60))
-                    }
-                    historyStore.saveAll(history)
+                // Preserve EVERY scan (including rejected quality & non-liquid controls) — never silently drop!
+                history.insert(resultItem, at: 0)
+                if history.count > 500 {
+                    history = Array(history.prefix(500))
                 }
+                historyStore.saveAll(history)
                 lastResultItem = resultItem
-                scanProgress = Double(batchIdx) / Double(max(1, batchTotalCount))
+                scanProgress = Double(batchIdx) / Double(targetCount)
             }
 
-            try? await timing.sleepMilliseconds(140)
+            warmAudioEngine.stopWarmBatchEngine()
+            try? await timing.sleepMilliseconds(120)
             if Task.isCancelled { return }
             scanProgress = 1.0
 
-            if batchTotalCount > 1 {
+            if targetCount > 1 {
                 selectedTab = .history
                 if let lastResultItem {
                     flowStep = .result(lastResultItem)
@@ -499,7 +603,8 @@ public final class ConsumerScanCoordinator: ObservableObject {
             }
         } catch {
             isConfiguringSession = false
-            await audioEngine.abortImmediately()
+            warmAudioEngine.stopWarmBatchEngine()
+            await researchCoordinator.audioEngine.abortImmediately()
             if Task.isCancelled { return }
             scanProgress = 0.0
             flowStep = .aim
@@ -508,8 +613,11 @@ public final class ConsumerScanCoordinator: ObservableObject {
     }
 
     private func friendlyConsumerMessage(for error: Error) -> String {
+        if let warmErr = error as? WarmAudioEngineError {
+            return warmErr.localizedDescription
+        }
         guard let failure = error as? AcquisitionFailure else {
-            return "Unable to complete the scan right now. Please hold your iPhone steady in a quiet spot and try again."
+            return "Unable to complete the scan right now. Please hold your device steady in a quiet spot and try again."
         }
         switch failure {
         case .microphonePermissionDenied:

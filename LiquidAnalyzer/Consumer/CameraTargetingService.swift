@@ -41,6 +41,7 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
     private var cachedSceneContextJPEG: Data?
     private var videoDevice: AVCaptureDevice?
     private var opticsLocked: Bool = false
+    private var isHardwareAdjusting: Bool = false
     private var lastThumbnailUptime: TimeInterval = 0
     private var lastAnalysisUptime: TimeInterval = 0
     private var previousLumaGrid: [Double]?
@@ -135,6 +136,12 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         frameLock.lock()
         defer { frameLock.unlock() }
         return cachedSceneContextJPEG
+    }
+
+    func currentHardwareAdjusting() -> Bool {
+        frameLock.lock()
+        defer { frameLock.unlock() }
+        return isHardwareAdjusting
     }
 
     func setOpticsLocked(_ locked: Bool, completion: @escaping @Sendable (Bool) -> Void) {
@@ -240,7 +247,12 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         let spatialContrast = gradientSum / (2.0 * 225.0)
         let activeQuadrants = quadrantContrast.filter { ($0 / 112.0) >= 0.018 }.count
 
+        let hwAdjusting = (videoDevice?.isAdjustingFocus ?? false)
+            || (videoDevice?.isAdjustingExposure ?? false)
+            || (videoDevice?.isAdjustingWhiteBalance ?? false)
+
         frameLock.lock()
+        isHardwareAdjusting = hwAdjusting
         let prev = previousLumaGrid
         previousLumaGrid = currentGrid
         let armed = now >= autoLockEnabledAfterUptime
@@ -255,8 +267,8 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
             motionDiff = diffSum / 256.0
         }
 
-        // Steady hand + multi-quadrant container contrast (prevents auto-triggering on blank walls)
-        let isSteadyOnTarget = armed && meanLuma > 0.06 && spatialContrast > 0.022 && activeQuadrants >= 3 && motionDiff < 0.044
+        // Steady hand + settled AE/AF/WB + multi-quadrant container contrast (prevents auto-triggering on blank walls or mid-AF hunt)
+        let isSteadyOnTarget = armed && !hwAdjusting && meanLuma > 0.06 && spatialContrast > 0.022 && activeQuadrants >= 3 && motionDiff < 0.044
         if isSteadyOnTarget {
             steadyScore = min(1.0, steadyScore + 0.22)
         } else {
@@ -329,6 +341,25 @@ public struct LiveCameraPreviewRepresentable: UIViewRepresentable {
 }
 #endif
 
+public struct CameraLockSnapshot: Equatable, Sendable {
+    public let opticsLocked: Bool
+    public let aeAfWbLockState: String
+    public let targetLockState: String
+    public let targetLockScore: Double
+
+    public init(
+        opticsLocked: Bool,
+        aeAfWbLockState: String,
+        targetLockState: String,
+        targetLockScore: Double
+    ) {
+        self.opticsLocked = opticsLocked
+        self.aeAfWbLockState = aeAfWbLockState
+        self.targetLockState = targetLockState
+        self.targetLockScore = targetLockScore
+    }
+}
+
 /// Manages camera preview and automatic steady-target lock on the AIM screen.
 /// Uses silent video-frame analysis (zero shutter sound) and never touches AVAudioSession.
 @MainActor
@@ -399,6 +430,69 @@ public final class CameraTargetingService: ObservableObject {
         return worker.latestSceneContextJPEG()
         #else
         return nil
+        #endif
+    }
+
+    public func captureLockSnapshot(isAutoTriggered: Bool, isControlledBatch: Bool) -> CameraLockSnapshot {
+        let score = targetLockProgress
+        guard isCameraLive else {
+            return CameraLockSnapshot(
+                opticsLocked: isOpticsLocked,
+                aeAfWbLockState: "HEADLESS",
+                targetLockState: "HEADLESS",
+                targetLockScore: score
+            )
+        }
+
+        let adjusting: Bool
+        #if os(iOS)
+        adjusting = worker.currentHardwareAdjusting()
+        #else
+        adjusting = false
+        #endif
+
+        let opticsState: String
+        if isOpticsLocked {
+            opticsState = "LOCKED"
+        } else if adjusting {
+            opticsState = "UNLOCKED_ADJUSTING"
+        } else {
+            opticsState = "UNLOCKED_SETTLED"
+        }
+
+        let targetState: String
+        if isControlledBatch {
+            targetState = score >= 0.65 ? "R1_STATIONARY_LOCKED" : "R1_BATCH_MANUAL_AIM"
+        } else if isAutoTriggered || score >= 0.99 {
+            targetState = "AUTO_STEADY_LOCKED"
+        } else if score >= 0.50 {
+            targetState = "MANUAL_STEADY"
+        } else {
+            targetState = "MANUAL_UNSTEADY"
+        }
+
+        return CameraLockSnapshot(
+            opticsLocked: isOpticsLocked,
+            aeAfWbLockState: opticsState,
+            targetLockState: targetState,
+            targetLockScore: score
+        )
+    }
+
+    public func lockOpticsForControlledBatchIfLive() async -> Bool {
+        guard isCameraLive else { return isOpticsLocked }
+        if isOpticsLocked { return true }
+        #if os(iOS)
+        let locked = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            worker.setOpticsLocked(true) { actual in
+                cont.resume(returning: actual)
+            }
+        }
+        isOpticsLocked = locked
+        return locked
+        #else
+        isOpticsLocked = true
+        return true
         #endif
     }
 

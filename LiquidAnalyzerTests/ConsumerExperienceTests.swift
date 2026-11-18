@@ -1,3 +1,4 @@
+import AVFAudio
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
@@ -361,7 +362,244 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertEqual(loaded.first?.formulaDisplay, "H₂O")
     }
 
+    func testDeconvolved20xRepeatabilityUnder15InchWeakEchoAndTimingJitter() throws {
+        let (ess, inv) = try Self.loadBundledESSAndInverse()
+        let classifier = OnDeviceAcousticClassifier()
+        let cupJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (215, 215, 215),
+            rimRGB: (80, 84, 90),
+            innerRGB: (190, 194, 198)
+        )
+
+        var prngState: UInt64 = 0x9E37_79B9_7F4A_7C15
+        var batchItems: [ConsumerScanItem] = []
+
+        for idx in 1...20 {
+            let jitter = Int(Self.nextGaussian(&prngState) * 1_100.0) // +/- ~23 ms timing jitter
+            let rec = Self.makeDeconvolvedChannelRecording(
+                ess: ess,
+                distanceInches: 15.0,
+                modes: [(2_315.0, 0.00035, 0.0032), (4_660.0, 0.00024, 0.0024), (6_684.0, 0.00021, 0.0020)],
+                noiseRMS: 0.0024,
+                onsetJitterSamples: jitter,
+                injectStartupTransient: true,
+                prng: &prngState
+            )
+            let item = classifier.classifySamples(
+                samples: rec,
+                inverseFilter: inv,
+                sampleRateHz: 48_000.0,
+                preRollFrames: 7_200,
+                activeFrames: 9_600,
+                scanSequenceNumber: idx,
+                batchRunID: "R1_20X_TEST",
+                batchScanIndex: idx,
+                batchTotalCount: 20,
+                geometryCondition: GeometryTestCondition.stationary15InBaseline.rawValue,
+                controlSeriesTag: ControlSeriesTag.unlabeledBlind.rawValue,
+                aeAfWbLockState: "LOCKED",
+                targetLockState: "R1_STATIONARY_LOCKED",
+                targetLockScore: 1.0,
+                thumbnailJPEGData: cupJPEG,
+                opticsLocked: true
+            )
+            batchItems.append(item)
+        }
+
+        XCTAssertEqual(batchItems.count, 20)
+        for item in batchItems {
+            XCTAssertNotEqual(item.status, .unclearScan)
+            // Every single scan in the 20x series must stay in the ~2315 Hz fundamental without jumping to 4.66 or 6.68 kHz
+            XCTAssertEqual(item.measuredPeakHz, 2_315.0, accuracy: 25.0)
+            XCTAssertNotNil(item.measuredFeatures?.primaryPeakAmplitudeDB)
+            XCTAssertNotNil(item.gateDecision)
+        }
+
+        let report = RepeatabilityPeakStabilityAnalyzer.analyze(items: batchItems)
+        XCTAssertEqual(report.validQualityAcquisitions, 20)
+        XCTAssertEqual(report.stabilityDisposition, "REPEATABLE_PERSISTENT_MODE")
+        XCTAssertLessThan(report.primaryPeakSDHz, 12.0)
+        XCTAssertFalse(report.persistentBands.isEmpty)
+        XCTAssertFalse(report.harmonicOrSubharmonicBands.isEmpty)
+    }
+
+    func testDeconvolvedPipelineHasZeroHardcodedLowFrequencyBiasWhenTrueModeIsHighFrequency() throws {
+        let (ess, inv) = try Self.loadBundledESSAndInverse()
+        let classifier = OnDeviceAcousticClassifier()
+        let cupJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (215, 215, 215),
+            rimRGB: (80, 84, 90),
+            innerRGB: (190, 194, 198)
+        )
+
+        var prngState: UInt64 = 0xA5A5_5A5A_1234_5678
+        for idx in 1...5 {
+            let rec = Self.makeDeconvolvedChannelRecording(
+                ess: ess,
+                distanceInches: 15.0,
+                modes: [(6_150.0, 0.00048, 0.0030)],
+                noiseRMS: 0.0018,
+                onsetJitterSamples: 350,
+                injectStartupTransient: false,
+                prng: &prngState
+            )
+            let item = classifier.classifySamples(
+                samples: rec,
+                inverseFilter: inv,
+                scanSequenceNumber: idx,
+                thumbnailJPEGData: cupJPEG
+            )
+            // True 6.15 kHz mode is preserved faithfully AND held back by Ambiguity Gate R1 as Unmatched Liquid
+            XCTAssertEqual(item.measuredPeakHz, 6_150.0, accuracy: 30.0)
+            XCTAssertEqual(item.status, .unmatchedSignature)
+            XCTAssertEqual(item.title, "Unmatched Liquid")
+            XCTAssertNotNil(item.rejectionReason)
+        }
+    }
+
+    func testNoisyBuriedEchoIsFlaggedUnclearAndRetainedInPeakStabilityReport() throws {
+        let (ess, inv) = try Self.loadBundledESSAndInverse()
+        let classifier = OnDeviceAcousticClassifier()
+        let cupJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (215, 215, 215),
+            rimRGB: (80, 84, 90),
+            innerRGB: (190, 194, 198)
+        )
+
+        var prngState: UInt64 = 0xDEAD_BEEF_CAFE_BABE
+        let buriedRec = Self.makeDeconvolvedChannelRecording(
+            ess: ess,
+            distanceInches: 15.0,
+            modes: [], // Zero container reflection -> tail SNR ~ 0 dB
+            noiseRMS: 0.0065,
+            onsetJitterSamples: 0,
+            injectStartupTransient: false,
+            prng: &prngState
+        )
+        let noisyItem = classifier.classifySamples(
+            samples: buriedRec,
+            inverseFilter: inv,
+            scanSequenceNumber: 99,
+            thumbnailJPEGData: cupJPEG
+        )
+
+        XCTAssertEqual(noisyItem.status, .unclearScan)
+        XCTAssertEqual(noisyItem.gateDecision, "REJECTED_SIGNAL_QUALITY")
+        XCTAssertNotNil(noisyItem.rejectionReason)
+        XCTAssertNotNil(noisyItem.measuredFeatures)
+
+        let report = RepeatabilityPeakStabilityAnalyzer.analyze(items: [noisyItem])
+        XCTAssertEqual(report.totalAcquisitions, 1)
+        XCTAssertEqual(report.validQualityAcquisitions, 0)
+        XCTAssertEqual(report.lowConfidenceNoisyScans.count, 1)
+    }
+
+    func testCapturedSampleStoreFIFOSegmentsAndLosslessWAVArchival() throws {
+        let store = CapturedSampleStore()
+        store.reset()
+        store.append([0.1, 0.2, 0.3]) // pre-segment warm idle samples
+
+        try store.openSegment()
+        XCTAssertThrowsError(try store.openSegment())
+        store.append([0.25, -0.5, 0.75, -0.25])
+        let seg1 = try store.closeSegment()
+        XCTAssertEqual(seg1, [0.25, -0.5, 0.75, -0.25])
+        XCTAssertThrowsError(try store.closeSegment())
+
+        store.append([0.0, 0.0]) // inter-sweep quiet gap
+        try store.openSegment()
+        store.append([0.5, -0.5])
+        let seg2 = try store.closeSegment()
+        XCTAssertEqual(seg2, [0.5, -0.5])
+        XCTAssertEqual(store.count(), 11)
+
+        let wavURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WarmStore_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+        try WarmBatchAudioEngine.writeLosslessMonoWAV(samples: seg1, sampleRateHz: 48_000.0, to: wavURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: wavURL.path))
+    }
+
     // MARK: - Helpers
+
+    private static func loadBundledESSAndInverse() throws -> (ess: [Float], inv: [Float]) {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let assetsDir = repoRoot.appendingPathComponent("Assets", isDirectory: true)
+        let essFile = try AVAudioFile(forReading: assetsDir.appendingPathComponent("SIG_ESS_v1.wav"))
+        let invFile = try AVAudioFile(forReading: assetsDir.appendingPathComponent("SIG_ESS_v1_inverse.wav"))
+
+        func readFloats(_ f: AVAudioFile) throws -> [Float] {
+            let n = AVAudioFrameCount(f.length)
+            let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: n)!
+            try f.read(into: buf)
+            let ptr = buf.floatChannelData![0]
+            return Array(UnsafeBufferPointer(start: ptr, count: Int(buf.frameLength)))
+        }
+        return (try readFloats(essFile), try readFloats(invFile))
+    }
+
+    private static func nextGaussian(_ state: inout UInt64) -> Double {
+        func nextUnit(_ s: inout UInt64) -> Double {
+            s = s &* 6364136223846793005 &+ 1442695040888963407
+            return Double((s >> 11) | 1) / Double(1 << 53)
+        }
+        let u1 = max(1e-9, nextUnit(&state))
+        let u2 = nextUnit(&state)
+        return sqrt(-2.0 * log(u1)) * cos(2.0 * Double.pi * u2)
+    }
+
+    private static func makeDeconvolvedChannelRecording(
+        ess: [Float],
+        distanceInches: Double,
+        modes: [(freqHz: Double, amp: Double, tauSec: Double)],
+        noiseRMS: Double,
+        onsetJitterSamples: Int,
+        injectStartupTransient: Bool,
+        prng: inout UInt64
+    ) -> [Float] {
+        let sr = 48_000.0
+        var h = [Double](repeating: 0.0, count: 1_024)
+        h[4] = 0.105
+        h[5] = -0.042
+        let tof = Int(round((2.0 * (distanceInches * 0.0254) / 343.0) * sr)) + 4
+        for k in 0..<420 where (tof + k) < h.count {
+            let dt = Double(k) / sr
+            var v = 0.0
+            for m in modes {
+                v += m.amp * exp(-dt / m.tauSec) * sin(2.0 * Double.pi * m.freqHz * dt)
+            }
+            h[tof + k] += v
+        }
+
+        // Direct time-domain convolution with short 512-tap channel h
+        let convLen = ess.count + 512
+        var clean = [Double](repeating: 0.0, count: convLen)
+        for i in 0..<ess.count {
+            let x = Double(ess[i])
+            for k in 0..<min(512, h.count) where h[k] != 0.0 {
+                clean[i + k] += x * h[k]
+            }
+        }
+
+        let totalLen = 26_000
+        var rec = [Float](repeating: 0.0, count: totalLen)
+        if injectStartupTransient {
+            for i in 0..<600 {
+                let pop = 0.014 * exp(-Double(i) / 120.0) * sin(2.0 * Double.pi * 6_800.0 * Double(i) / sr)
+                rec[i] += Float(pop)
+            }
+        }
+        let startIdx = max(2_000, 7_200 + onsetJitterSamples)
+        for i in 0..<clean.count where (startIdx + i) < totalLen {
+            rec[startIdx + i] += Float(clean[i])
+        }
+        for i in 0..<totalLen {
+            rec[i] += Float(noiseRMS * nextGaussian(&prng))
+        }
+        return rec
+    }
 
     private static func makeWaterResonanceSamples() -> [Float] {
         let sr = 48_000.0

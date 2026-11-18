@@ -48,12 +48,74 @@ public struct ConsumerRootView: View {
 
 // MARK: - Tab 2: History
 
+private struct R1HistoryCohort: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let items: [ConsumerScanItem]
+}
+
 public struct ConsumerHistoryView: View {
     @ObservedObject var coordinator: ConsumerScanCoordinator
     @State private var selectedTuneItem: ConsumerScanItem?
+    @State private var selectedCohortID: String = ""
 
     public init(coordinator: ConsumerScanCoordinator) {
         self.coordinator = coordinator
+    }
+
+    private var isolatedCohorts: [R1HistoryCohort] {
+        var cohorts: [R1HistoryCohort] = []
+        var seenBatchIDs: Set<String> = []
+
+        // 1. Dedicated R1 multi-scan batches (each strictly fixed-geometry)
+        for item in coordinator.history {
+            if let bID = item.batchRunID, bID.hasPrefix("R1_"), !seenBatchIDs.contains(bID) {
+                seenBatchIDs.insert(bID)
+                let members = coordinator.history.filter { $0.batchRunID == bID }
+                let geomRaw = item.geometryCondition ?? GeometryTestCondition.stationary15InBaseline.rawValue
+                let geomTitle = GeometryTestCondition(rawValue: geomRaw)?.displayLabel ?? geomRaw
+                let ctrlRaw = item.controlSeriesTag ?? ControlSeriesTag.unlabeledBlind.rawValue
+                let ctrlSuffix: String
+                if let tag = ControlSeriesTag(rawValue: ctrlRaw), tag != .unlabeledBlind {
+                    ctrlSuffix = " • \(tag.displayLabel)"
+                } else {
+                    ctrlSuffix = ""
+                }
+                cohorts.append(
+                    R1HistoryCohort(
+                        id: "BATCH_\(bID)",
+                        label: "\(bID) (\(geomTitle)\(ctrlSuffix), \(members.count) scans)",
+                        items: members
+                    )
+                )
+            }
+        }
+
+        // 2. Geometry-segregated cohorts (NEVER pools 15-in Stationary Baseline with Close-Range or Handheld!)
+        for cond in GeometryTestCondition.allCases {
+            let matching = coordinator.history.filter {
+                ($0.geometryCondition ?? GeometryTestCondition.handheldGeneral.rawValue) == cond.rawValue
+            }
+            if matching.count >= 2 {
+                cohorts.append(
+                    R1HistoryCohort(
+                        id: "GEOM_\(cond.rawValue)",
+                        label: "All \(cond.displayLabel) (\(matching.count) scans)",
+                        items: matching
+                    )
+                )
+            }
+        }
+
+        return cohorts
+    }
+
+    private var activeCohort: R1HistoryCohort? {
+        let all = isolatedCohorts
+        if let match = all.first(where: { $0.id == selectedCohortID }) {
+            return match
+        }
+        return all.first
     }
 
     public var body: some View {
@@ -75,16 +137,53 @@ public struct ConsumerHistoryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        if coordinator.history.count >= 2 {
-                            Section("Repeatability Gate R1 Summary (\(coordinator.history.count) Scans)") {
+                        if let cohort = activeCohort {
+                            Section("Repeatability Gate R1 Summary (Geometry-Isolated)") {
+                                if isolatedCohorts.count > 1 {
+                                    Picker(
+                                        "Cohort",
+                                        selection: Binding(
+                                            get: { cohort.id },
+                                            set: { selectedCohortID = $0 }
+                                        )
+                                    ) {
+                                        ForEach(isolatedCohorts) { c in
+                                            Text(c.label).tag(c.id)
+                                        }
+                                    }
+                                    .font(.caption)
+                                }
+
                                 RepeatabilityGateSummaryCard(
-                                    items: coordinator.history,
-                                    csvURL: coordinator.exportRepeatabilityCSVURL()
+                                    items: cohort.items,
+                                    cohortCSVURL: coordinator.exportRepeatabilityCSVURL(
+                                        items: cohort.items,
+                                        filenameSuffix: cohort.id
+                                    ),
+                                    allHistoryCSVURL: coordinator.exportRepeatabilityCSVURL(
+                                        items: nil,
+                                        filenameSuffix: "full_history"
+                                    )
                                 )
+                            }
+
+                            if cohort.items.count >= 2 {
+                                Section("Peak-Stability Test (\(cohort.items.count) Scans • Modal Only)") {
+                                    PeakStabilitySummaryCard(
+                                        report: RepeatabilityPeakStabilityAnalyzer.analyze(items: cohort.items)
+                                    )
+                                }
+                            }
+                        } else if let csvURL = coordinator.exportRepeatabilityCSVURL() {
+                            Section("Export") {
+                                ShareLink(item: csvURL) {
+                                    Label("Export Repeatability Gate R1 CSV", systemImage: "square.and.arrow.up")
+                                        .font(.caption.weight(.bold))
+                                }
                             }
                         }
 
-                        Section("Recorded Scans") {
+                        Section("Recorded Scans (\(coordinator.history.count))") {
                             ForEach(coordinator.history) { item in
                                 Button(action: {
                                     coordinator.openHistoryItem(item)
@@ -93,24 +192,13 @@ public struct ConsumerHistoryView: View {
                                         ZStack {
                                             Circle()
                                                 .fill(
-                                                    (item.status == .referenceMatch
-                                                        ? LiquidAnalyzerPalette.resultGreenStart
-                                                        : LiquidAnalyzerPalette.scanBlue
-                                                    ).opacity(0.14)
+                                                    statusAccentColor(for: item.status).opacity(0.14)
                                                 )
                                                 .frame(width: 46, height: 46)
 
-                                            Image(
-                                                systemName: item.status == .referenceMatch
-                                                    ? "checkmark.circle.fill"
-                                                    : "waveform"
-                                            )
-                                            .font(.system(size: 20, weight: .semibold))
-                                            .foregroundStyle(
-                                                item.status == .referenceMatch
-                                                    ? LiquidAnalyzerPalette.resultGreenStart
-                                                    : LiquidAnalyzerPalette.scanBlue
-                                            )
+                                            Image(systemName: statusIconName(for: item.status))
+                                                .font(.system(size: 20, weight: .semibold))
+                                                .foregroundStyle(statusAccentColor(for: item.status))
                                         }
 
                                         VStack(alignment: .leading, spacing: 3) {
@@ -135,6 +223,13 @@ public struct ConsumerHistoryView: View {
                                             )
                                             .font(.caption2.monospaced())
                                             .foregroundStyle(.secondary)
+
+                                            if let reason = item.rejectionReason, !reason.isEmpty {
+                                                Text(reason)
+                                                    .font(.system(size: 9.5, design: .monospaced))
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
+                                            }
                                         }
 
                                         Spacer()
@@ -172,6 +267,10 @@ public struct ConsumerHistoryView: View {
                 }
             }
             .navigationTitle("History")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            #endif
             .toolbar {
                 if !coordinator.history.isEmpty {
                     ToolbarItem(placement: .automatic) {
@@ -190,30 +289,70 @@ public struct ConsumerHistoryView: View {
             }
         }
     }
+
+    private func statusIconName(for status: ConsumerMatchStatus) -> String {
+        switch status {
+        case .referenceMatch:
+            return "checkmark.circle.fill"
+        case .unmatchedSignature:
+            return "waveform"
+        case .emptyContainer:
+            return "cup.and.saucer.fill"
+        case .nonLiquidMaterial:
+            return "cube.fill"
+        case .unclearScan:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func statusAccentColor(for status: ConsumerMatchStatus) -> Color {
+        switch status {
+        case .referenceMatch:
+            return LiquidAnalyzerPalette.resultGreenStart
+        case .unmatchedSignature, .emptyContainer:
+            return LiquidAnalyzerPalette.scanBlue
+        case .nonLiquidMaterial, .unclearScan:
+            return LiquidAnalyzerPalette.compositionOrange
+        }
+    }
 }
 
 private struct RepeatabilityGateSummaryCard: View {
     let items: [ConsumerScanItem]
-    let csvURL: URL?
+    let cohortCSVURL: URL?
+    let allHistoryCSVURL: URL?
 
     var body: some View {
-        let peaks = items.map(\.measuredPeakHz)
-        let centroids = items.map(\.measuredCentroidHz)
-        let amps = items.compactMap { $0.measuredFeatures?.activeRMSDBFS }
-        let echos = items.compactMap { $0.measuredFeatures?.echoReturnDB }
+        let validItems = items.filter { $0.status != .unclearScan && $0.status != .nonLiquidMaterial }
+        let rejectedCount = items.count - validItems.count
+        let statSource = validItems.isEmpty ? items : validItems
+
+        let peaks = statSource.map(\.measuredPeakHz)
+        let centroids = statSource.map(\.measuredCentroidHz)
+        let amps = statSource.compactMap { $0.measuredFeatures?.activeRMSDBFS }
+        let echos = statSource.compactMap { $0.measuredFeatures?.echoReturnDB }
+        let tailSNRs = statSource.compactMap { $0.measuredFeatures?.tailSNRDB }
 
         let (pkMean, pkSD, pkMin, pkMax) = Self.stats(peaks)
         let (ctMean, ctSD, _, _) = Self.stats(centroids)
         let (ampMean, ampSD, _, _) = Self.stats(amps)
         let (ecMean, ecSD, _, _) = Self.stats(echos)
+        let (tsMean, _, _, _) = Self.stats(tailSNRs)
 
         var topCounts: [String: Int] = [:]
-        for name in items.compactMap(\.topCandidateName) {
+        for name in statSource.compactMap(\.topCandidateName) {
             topCounts[name, default: 0] += 1
         }
         let dominantTop = topCounts.max { $0.value < $1.value }
 
         return VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("Valid / Total Scans")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(validItems.count) / \(items.count) valid (\(rejectedCount) rejected)")
+                    .fontWeight(.semibold)
+            }
             HStack {
                 Text("Primary Peak Hz")
                     .foregroundStyle(.secondary)
@@ -230,10 +369,10 @@ private struct RepeatabilityGateSummaryCard: View {
             }
             if !amps.isEmpty {
                 HStack {
-                    Text("Active Amp / Echo")
-                        .foregroundStyle(.secondary)
+                    Text("Amp / Echo / TailSNR")
+                    .foregroundStyle(.secondary)
                     Spacer()
-                    Text(String(format: "%.1f±%.1f dBFS • %.1f±%.1f dB", ampMean, ampSD, ecMean, ecSD))
+                    Text(String(format: "%.1f±%.1f dBFS • %.1f±%.1f dB • %.1f dB", ampMean, ampSD, ecMean, ecSD, tsMean))
                         .fontWeight(.medium)
                 }
             }
@@ -242,13 +381,13 @@ private struct RepeatabilityGateSummaryCard: View {
                     Text("Top Raw Candidate")
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text("\(dom.key) (\(dom.value)/\(items.count) scans)")
+                    Text("\(dom.key) (\(dom.value)/\(statSource.count) valid)")
                         .fontWeight(.semibold)
                 }
             }
-            if let csvURL {
-                ShareLink(item: csvURL) {
-                    Label("Export Repeatability Gate R1 CSV", systemImage: "square.and.arrow.up")
+            if let cohortCSVURL {
+                ShareLink(item: cohortCSVURL) {
+                    Label("Export Cohort R1 CSV", systemImage: "square.and.arrow.up")
                         .font(.caption.weight(.bold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
@@ -259,6 +398,14 @@ private struct RepeatabilityGateSummaryCard: View {
                 }
                 .padding(.top, 4)
             }
+            if let allHistoryCSVURL, allHistoryCSVURL != cohortCSVURL {
+                ShareLink(item: allHistoryCSVURL) {
+                    Label("Export Full History CSV", systemImage: "doc.text")
+                        .font(.caption2.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                }
+            }
         }
         .font(.caption.monospaced())
         .padding(.vertical, 4)
@@ -268,8 +415,83 @@ private struct RepeatabilityGateSummaryCard: View {
         guard !values.isEmpty else { return (0, 0, 0, 0) }
         let n = Double(values.count)
         let mean = values.reduce(0.0, +) / n
-        let variance = values.reduce(0.0) { $0 + ($1 - mean) * ($1 - mean) } / max(1.0, n - 1.0)
+        let variance = values.count > 1
+            ? values.reduce(0.0) { $0 + ($1 - mean) * ($1 - mean) } / (n - 1.0)
+            : 0.0
         return (mean, sqrt(max(0.0, variance)), values.min() ?? mean, values.max() ?? mean)
+    }
+}
+
+private struct PeakStabilitySummaryCard: View {
+    let report: RepeatabilityPeakStabilityReport
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Modal Stability")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(report.stabilityDisposition) (CV \(String(format: "%.2f%%", report.primaryPeakCVPercent)))")
+                    .fontWeight(.bold)
+            }
+
+            bandRow(
+                title: "A. Persistent",
+                bands: report.persistentBands
+            )
+            bandRow(
+                title: "B. Intermittent",
+                bands: report.intermittentBands
+            )
+            bandRow(
+                title: "C. Harmonics",
+                bands: report.harmonicOrSubharmonicBands
+            )
+            bandRow(
+                title: "D. Transients",
+                bands: report.isolatedTransientBands
+            )
+
+            HStack(alignment: .top) {
+                Text("E. Low-SNR / QC")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(
+                    report.lowConfidenceNoisyScans.isEmpty
+                        ? "0 scans"
+                        : "\(report.lowConfidenceNoisyScans.count) scan(s): " +
+                          report.lowConfidenceNoisyScans.prefix(3).map { "#\($0.scanSequenceNumber ?? $0.batchScanIndex ?? 0) (\($0.reason))" }.joined(separator: "; ")
+                )
+                .multilineTextAlignment(.trailing)
+            }
+
+            Text("Modal persistence diagnostic only — never converted into chemical identity.")
+                .font(.system(size: 9.5))
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+        }
+        .font(.caption2.monospaced())
+        .padding(.vertical, 4)
+    }
+
+    private func bandRow(title: String, bands: [TrackedSpectralBand]) -> some View {
+        HStack(alignment: .top) {
+            Text(title)
+                .foregroundStyle(.secondary)
+            Spacer()
+            if bands.isEmpty {
+                Text("None")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(
+                    bands.prefix(3).map { b in
+                        let extra = b.harmonicRelationNote.map { " [\($0)]" } ?? ""
+                        return String(format: "%.0f±%.0f Hz (%d/%d)%@", b.centerMeanHz, b.centerSDHz, b.presenceCount, b.validScanCount, extra)
+                    }.joined(separator: "; ")
+                )
+                .multilineTextAlignment(.trailing)
+            }
+        }
     }
 }
 
@@ -407,7 +629,7 @@ public struct ConsumerMoreView: View {
 
                 Section("About") {
                     LabeledContent("Application", value: "Liquid Analyzer")
-                    LabeledContent("Version", value: "0.3.4 (Build 9)")
+                    LabeledContent("Version", value: "0.3.5 (Build 10)")
                 }
             }
             .navigationTitle("More")

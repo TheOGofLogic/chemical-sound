@@ -134,12 +134,14 @@ public actor AudioSessionController {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
 
+        // Cleanly reset if ChemicalTunePlayer or another feature left the session in .playback / .default mode
+        if session.category != .playAndRecord || session.mode != .measurement {
+            try? session.overrideOutputAudioPort(.none)
+            try? session.setActive(false)
+        }
+
         do {
-            do {
-                try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
-            } catch {
-                try session.setCategory(.playAndRecord, mode: .measurement, options: [])
-            }
+            try session.setCategory(.playAndRecord, mode: .measurement, options: [])
             try? session.setPreferredSampleRate(48_000.0)
             try? session.setPreferredIOBufferDuration(0.010)
             try session.setActive(true)
@@ -158,7 +160,10 @@ public actor AudioSessionController {
             }
         }
 
+        // Route output to built-in bottom speaker FIRST, let route switch settle, then lock bottom omni mic
         try? session.overrideOutputAudioPort(.speaker)
+        try? await Task.sleep(for: .milliseconds(60))
+
         if let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
             try? session.setPreferredInput(builtInMic)
             if let dataSources = builtInMic.dataSources,
@@ -169,9 +174,12 @@ public actor AudioSessionController {
                 try? builtInMic.setPreferredDataSource(bottomOmni)
             }
         }
+        if session.maximumInputNumberOfChannels >= 1 {
+            try? session.setPreferredInputNumberOfChannels(1)
+        }
 
-        // Allow CoreAudio measurement route & fixed hardware gain to settle before starting AVAudioEngine
-        try? await Task.sleep(for: .milliseconds(100))
+        // Allow CoreAudio measurement route, fixed hardware ADC gain & DC blocker to settle completely
+        try? await Task.sleep(for: .milliseconds(120))
 
         let rate = session.sampleRate > 0 ? session.sampleRate : 48_000.0
         return (rate, session.outputVolume)

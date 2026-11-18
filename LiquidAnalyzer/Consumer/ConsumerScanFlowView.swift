@@ -348,8 +348,8 @@ public struct ConsumerScanFlowView: View {
                     endPoint: .bottom
                 )
 
-                VStack(spacing: 16) {
-                    HStack(spacing: 10) {
+                VStack(spacing: 12) {
+                    HStack(spacing: 8) {
                         Button(action: {
                             coordinator.startRepeatabilityGateR1Batch(count: 20)
                         }) {
@@ -360,7 +360,7 @@ public struct ConsumerScanFlowView: View {
                                 .padding(.vertical, 8)
                                 .background(
                                     Capsule(style: .continuous)
-                                        .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.84))
+                                        .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.88))
                                 )
                         }
                         .buttonStyle(.plain)
@@ -390,6 +390,59 @@ public struct ConsumerScanFlowView: View {
                         .buttonStyle(.plain)
                     }
                     .padding(.top, 10)
+
+                    // Controlled Geometry & Blind Audit Series Tag (never passed to classifier)
+                    HStack(spacing: 8) {
+                        Menu {
+                            ForEach(GeometryTestCondition.allCases, id: \.rawValue) { cond in
+                                Button {
+                                    coordinator.selectedGeometryCondition = cond
+                                } label: {
+                                    if coordinator.selectedGeometryCondition == cond {
+                                        Label(cond.displayLabel, systemImage: "checkmark")
+                                    } else {
+                                        Text(cond.displayLabel)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(coordinator.selectedGeometryCondition.displayLabel, systemImage: "ruler")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.black.opacity(0.58))
+                                )
+                        }
+
+                        Spacer()
+
+                        Menu {
+                            ForEach(ControlSeriesTag.allCases, id: \.rawValue) { tag in
+                                Button {
+                                    coordinator.selectedControlSeriesTag = tag
+                                } label: {
+                                    if coordinator.selectedControlSeriesTag == tag {
+                                        Label(tag.displayLabel, systemImage: "checkmark")
+                                    } else {
+                                        Text(tag.displayLabel)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(coordinator.selectedControlSeriesTag.displayLabel, systemImage: "tag")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.black.opacity(0.58))
+                                )
+                        }
+                    }
 
                     Spacer(minLength: 6)
 
@@ -662,51 +715,7 @@ public struct ConsumerScanFlowView: View {
 
                             if let feat = item.measuredFeatures {
                                 DisclosureGroup("Repeatability Gate R1 Telemetry") {
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        if let seq = item.scanSequenceNumber {
-                                            r1Row("Scan #", "#\(seq)")
-                                        }
-                                        r1Row("Primary Peak", String(format: "%.1f Hz", feat.dominantPeakHz))
-                                        r1Row(
-                                            "Secondary Peaks",
-                                            feat.secondaryPeaksHz.isEmpty
-                                                ? "None"
-                                                : feat.secondaryPeaksHz.map { String(format: "%.0f Hz", $0) }.joined(separator: ", ")
-                                        )
-                                        r1Row(
-                                            "Amplitude / SNR",
-                                            String(format: "%.1f dBFS (pk %.1f) • SNR %.1f dB", feat.activeRMSDBFS, feat.peakDBFS, feat.activeSNRDB)
-                                        )
-                                        r1Row(
-                                            "Echo / Scatter",
-                                            String(format: "Echo %.1f dB • HF %.1f dB", feat.echoReturnDB, feat.highFreqBubbleScatterDB)
-                                        )
-                                        r1Row(
-                                            "Container Mode",
-                                            String(format: "Cent %.0f Hz • Decay %.0f dB/s • Cav %.1f dB", feat.spectralCentroidHz, feat.decaySlopeDBPerSec, feat.cavityMultipathDB)
-                                        )
-                                        r1Row(
-                                            "Vector / Checksum",
-                                            "[\(feat.subBandShapeDB.map { String(format: "%+.1f", $0) }.joined(separator: ","))] • \(feat.featureVectorChecksum)"
-                                        )
-                                        if let top = item.topCandidateName, let td = item.topCandidateDistance {
-                                            r1Row("Top Candidate", String(format: "%@ (d=%.3f)", top, td))
-                                        }
-                                        if let sec = item.runnerUpTitle, let sd = item.secondCandidateDistance {
-                                            r1Row("Second Candidate", String(format: "%@ (d=%.3f)", sec, sd))
-                                        }
-                                        if let margin = item.winningMargin {
-                                            r1Row("Winning Margin", String(format: "+%.3f", margin))
-                                        }
-                                        if let allScores = item.allCandidateDistances, !allScores.isEmpty {
-                                            Text("Raw Scores: " + allScores.prefix(6).map { "\($0.displayName)=\(String(format: "%.2f", $0.distance))" }.joined(separator: " | "))
-                                                .font(.system(size: 10, design: .monospaced))
-                                                .foregroundStyle(.secondary)
-                                                .padding(.top, 2)
-                                        }
-                                    }
-                                    .font(.caption2)
-                                    .padding(.top, 6)
+                                    r1TelemetryContent(item: item, feat: feat)
                                 }
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color(red: 0.24, green: 0.30, blue: 0.42))
@@ -857,6 +866,93 @@ public struct ConsumerScanFlowView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(LiquidAnalyzerPalette.headerNavy)
+    }
+
+    private func r1TelemetryContent(item: ConsumerScanItem, feat: ExtractedConsumerFeatures) -> some View {
+        let secondarySummary: String = {
+            guard !feat.secondaryPeaksHz.isEmpty else { return "None" }
+            var parts: [String] = []
+            for (idx, hz) in feat.secondaryPeaksHz.enumerated() {
+                if idx < feat.secondaryPeakAmplitudesDB.count {
+                    parts.append(String(format: "%.0f Hz (%.1f dB)", hz, feat.secondaryPeakAmplitudesDB[idx]))
+                } else {
+                    parts.append(String(format: "%.0f Hz", hz))
+                }
+            }
+            return parts.joined(separator: ", ")
+        }()
+        let lockSummary = "\(item.aeAfWbLockState ?? (feat.opticsLocked ? "LOCKED" : "UNLOCKED")) • \(item.targetLockState ?? "CAPTURED")"
+        let vectorText = "[\(feat.subBandShapeDB.map { String(format: "%+.1f", $0) }.joined(separator: ","))] • \(feat.featureVectorChecksum)"
+
+        return VStack(alignment: .leading, spacing: 5) {
+            Group {
+                if let seq = item.scanSequenceNumber {
+                    let batchLabel = (item.batchScanIndex != nil && item.batchTotalCount != nil)
+                        ? " (\(item.batchScanIndex!)/\(item.batchTotalCount!))"
+                        : ""
+                    r1Row("Scan #", "#\(seq)\(batchLabel)")
+                }
+                if let geom = item.geometryCondition {
+                    r1Row("Geometry Cohort", geom)
+                }
+                if let tag = item.controlSeriesTag, tag != ControlSeriesTag.unlabeledBlind.rawValue {
+                    r1Row("Control Tag (Audit)", tag)
+                }
+                r1Row("Lock State", lockSummary)
+                r1Row(
+                    "Primary Peak",
+                    String(
+                        format: "%.1f Hz (%.1f dB • persist %.0f%%)",
+                        feat.dominantPeakHz,
+                        feat.primaryPeakAmplitudeDB,
+                        feat.intraScanPersistenceRatio * 100.0
+                    )
+                )
+                r1Row("Secondary Peaks", secondarySummary)
+                r1Row(
+                    "Amplitude / SNR",
+                    String(format: "%.1f dBFS (pk %.1f) • SNR %.1f dB", feat.activeRMSDBFS, feat.peakDBFS, feat.activeSNRDB)
+                )
+                r1Row(
+                    "Echo / Tail SNR",
+                    String(format: "Echo %.1f dB (%.1f dBFS) • Tail SNR %.1f dB", feat.echoReturnDB, feat.echoRMSDBFS, feat.tailSNRDB)
+                )
+                r1Row(
+                    "Sync / TOF / HF",
+                    String(format: "Sync %+d smp • TOF %.2f ms • HF %.1f dB", feat.alignmentOffsetSamples, feat.echoArrivalDelayMs, feat.highFreqBubbleScatterDB)
+                )
+            }
+            Group {
+                r1Row(
+                    "Container Mode",
+                    String(format: "Cent %.0f Hz • Decay %.0f dB/s • Cav %.1f dB", feat.spectralCentroidHz, feat.decaySlopeDBPerSec, feat.cavityMultipathDB)
+                )
+                r1Row("Vector / Checksum", vectorText)
+                if let gateDec = item.gateDecision {
+                    r1Row("Gate Decision", gateDec)
+                }
+                if let reason = item.rejectionReason, !reason.isEmpty {
+                    r1Row("Hold / Reject Why", reason)
+                }
+                if let top = item.topCandidateName, let td = item.topCandidateDistance {
+                    r1Row("Top Candidate", String(format: "%@ (d=%.3f)", top, td))
+                }
+                if let sec = item.runnerUpTitle, let sd = item.secondCandidateDistance {
+                    r1Row("Second Candidate", String(format: "%@ (d=%.3f)", sec, sd))
+                }
+                if let margin = item.winningMargin {
+                    r1Row("Winning Margin", String(format: "+%.3f", margin))
+                }
+                if let allScores = item.allCandidateDistances, !allScores.isEmpty {
+                    Text("Raw Scores: " + allScores.prefix(6).map { "\($0.displayName)=\(String(format: "%.2f", $0.distance))" }.joined(separator: " | "))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                }
+            }
+        }
+        .font(.caption2)
+        .padding(.top, 6)
     }
 
     private func r1Row(_ label: String, _ value: String) -> some View {
