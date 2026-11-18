@@ -14,7 +14,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
 
     public init(
         referenceLibrary: [ReferenceLiquidProfile] = ReferenceLiquidProfile.provisionalLibrary,
-        distanceThreshold: Double = 0.90,
+        distanceThreshold: Double = 0.75,
         minimumWinningMargin: Double = 0.11,
         minimumSNRDB: Double = 1.8
     ) {
@@ -183,11 +183,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let margin = secondDistance - best.distance
 
         let isExplicitLabelOrOptics = (scored.count == 1 && visual.hint != .audioOnly && visual.hint != .openVesselAqueousOrGeneral)
-        let effectiveThreshold = isExplicitLabelOrOptics ? 2.40 : distanceThreshold
-        let effectiveMargin = isExplicitLabelOrOptics ? 0.0 : minimumWinningMargin
+        let effectiveThreshold = isExplicitLabelOrOptics ? 3.10 : distanceThreshold
 
         // STRINGENT AMBIGUITY GATE: Weak match OR close first/second candidates -> UNMATCHED (never force a chemical!)
-        if best.distance > effectiveThreshold || margin < effectiveMargin {
+        if best.distance > effectiveThreshold || (!isExplicitLabelOrOptics && margin < minimumWinningMargin) {
             return buildUnmatchedItem(
                 features: features,
                 scanSequenceNumber: scanSequenceNumber,
