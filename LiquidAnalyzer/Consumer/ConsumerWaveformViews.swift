@@ -25,19 +25,94 @@ public enum LiquidAnalyzerPalette {
     public static let tuneMagenta = Color(red: 0.88, green: 0.18, blue: 0.62)
 }
 
-// MARK: - 1. AIM Screen Targeting Frame (`[   ]`)
+// MARK: - Brand Droplet + Acoustic Waveform Emblem (Matches Poster Header Logo)
 
-public struct TargetingReticleView: View {
-    @State private var pulse = false
+public struct WaterDropSoundLogoView: View {
+    public let size: CGFloat
 
-    public init() {}
+    public init(size: CGFloat = 58) {
+        self.size = size
+    }
 
     public var body: some View {
         ZStack {
+            WaterDropletShape()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.16, green: 0.84, blue: 1.00),
+                            Color(red: 0.05, green: 0.48, blue: 0.96)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: size * 0.82, height: size)
+                .shadow(color: LiquidAnalyzerPalette.scanBlue.opacity(0.32), radius: 10, y: 5)
+
+            // Five crisp white vertical acoustic bars inside droplet
+            HStack(alignment: .center, spacing: size * 0.055) {
+                ForEach([0.16, 0.30, 0.44, 0.28, 0.15], id: \.self) { ratio in
+                    Capsule(style: .continuous)
+                        .fill(Color.white)
+                        .frame(width: max(2.5, size * 0.06), height: size * CGFloat(ratio))
+                }
+            }
+            .offset(y: size * 0.11)
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+private struct WaterDropletShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width
+        let h = rect.height
+        var p = Path()
+        p.move(to: CGPoint(x: w * 0.5, y: 0))
+        p.addCurve(
+            to: CGPoint(x: w, y: h * 0.64),
+            control1: CGPoint(x: w * 0.72, y: h * 0.25),
+            control2: CGPoint(x: w, y: h * 0.45)
+        )
+        p.addArc(
+            center: CGPoint(x: w * 0.5, y: h * 0.64),
+            radius: w * 0.5,
+            startAngle: .degrees(0),
+            endAngle: .degrees(180),
+            clockwise: false
+        )
+        p.addCurve(
+            to: CGPoint(x: w * 0.5, y: 0),
+            control1: CGPoint(x: 0, y: h * 0.45),
+            control2: CGPoint(x: w * 0.28, y: h * 0.25)
+        )
+        p.closeSubpath()
+        return p
+    }
+}
+
+// MARK: - 1. AIM Screen Targeting Frame (`[   ]`) with Live Target-Lock Glow
+
+public struct TargetingReticleView: View {
+    public let lockProgress: Double
+    @State private var pulse = false
+
+    public init(lockProgress: Double = 0.0) {
+        self.lockProgress = lockProgress
+    }
+
+    public var body: some View {
+        let isLocking = lockProgress >= 0.25
+        let primaryColor = isLocking ? LiquidAnalyzerPalette.resultGreenEnd : LiquidAnalyzerPalette.scanCyan
+        let secondaryColor = isLocking ? LiquidAnalyzerPalette.scanCyan : LiquidAnalyzerPalette.scanBlue
+
+        ZStack {
             // Subtle inner glow guide
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(LiquidAnalyzerPalette.scanCyan.opacity(pulse ? 0.28 : 0.12), lineWidth: 1.5)
-                .scaleEffect(pulse ? 1.015 : 0.99)
+                .stroke(primaryColor.opacity(isLocking ? 0.55 : (pulse ? 0.28 : 0.12)), lineWidth: isLocking ? 2.2 : 1.5)
+                .scaleEffect(isLocking ? (1.0 - CGFloat(lockProgress) * 0.03) : (pulse ? 1.015 : 0.99))
+                .animation(.easeOut(duration: 0.16), value: lockProgress)
 
             // Four clean rounded corner brackets matching the mockup
             GeometryReader { geo in
@@ -73,13 +148,13 @@ public struct TargetingReticleView: View {
                 }
                 .stroke(
                     LinearGradient(
-                        colors: [LiquidAnalyzerPalette.scanCyan, LiquidAnalyzerPalette.scanBlue],
+                        colors: [primaryColor, secondaryColor],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
-                    style: StrokeStyle(lineWidth: 4.0, lineCap: .round, lineJoin: .round)
+                    style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round)
                 )
-                .shadow(color: LiquidAnalyzerPalette.scanCyan.opacity(0.55), radius: 8)
+                .shadow(color: primaryColor.opacity(0.65), radius: 9)
             }
         }
         .onAppear {

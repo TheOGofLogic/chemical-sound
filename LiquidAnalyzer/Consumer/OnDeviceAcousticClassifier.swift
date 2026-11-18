@@ -113,7 +113,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let margin = secondDistance - best.distance
 
         // 3. Open-Set Unknown Rejection (`NO_VALIDATED_MATCH`)
-        if best.distance > distanceThreshold || margin < 0.08 {
+        if best.distance > distanceThreshold || margin < 0.02 {
             return buildUnmatchedItem(features: features, thumbnailJPEGData: thumbnailJPEGData)
         }
 
@@ -177,8 +177,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let actDB = ImmediateAudioAnalyzer.linearToDBFS(actRMS)
         let snrDB = max(0.0, actDB - preDB)
 
-        // Deconvolve with matched inverse filter if available; otherwise analyze active + post-roll response window
+        // Deconvolve with matched inverse filter if available; normalize echo tail against direct arrival
+        // so built-in iPhone speaker coloration (3-6 kHz peak) cancels out automatically on real hardware.
         let analysisSignal: [Double]
+        var directArrivalSignal: [Double]?
         if let inv = inverseFilter, !inv.isEmpty, samples.count > actStart + 512 {
             let responseSlice = Array(samples[actStart..<samples.count]).map { $0.isFinite ? Double($0) : 0.0 }
             let invDouble = inv.map { $0.isFinite ? Double($0) : 0.0 }
@@ -191,6 +193,11 @@ public struct OnDeviceAcousticClassifier: Sendable {
                     maxAbs = a
                     peakIdx = idx
                 }
+            }
+            let dirStart = max(0, peakIdx - Int(0.0005 * sampleRateHz))
+            let dirEnd = min(ir.count, peakIdx + Int(0.0012 * sampleRateHz))
+            if dirEnd - dirStart >= 32 {
+                directArrivalSignal = Array(ir[dirStart..<dirEnd])
             }
             // Extract causal resonance tail window (+1.2 ms to +42 ms after impulse arrival t0)
             let tailStart = min(ir.count, peakIdx + Int(0.0012 * sampleRateHz))
@@ -217,6 +224,27 @@ public struct OnDeviceAcousticClassifier: Sendable {
         }
         Self.fftRadix2(real: &real, imag: &imag, inverse: false)
 
+        var directPower: [Double]?
+        if let dirSig = directArrivalSignal, dirSig.count > 1 {
+            var dR = [Double](repeating: 0.0, count: nFFT)
+            var dI = [Double](repeating: 0.0, count: nFFT)
+            let dc = min(dirSig.count, nFFT)
+            for i in 0..<dc {
+                let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(i) / Double(dc - 1)))
+                dR[i] = dirSig[i] * w
+            }
+            Self.fftRadix2(real: &dR, imag: &dI, inverse: false)
+            var maxDP = 1e-12
+            var rawDP = [Double](repeating: 0.0, count: nFFT / 2)
+            for b in 0..<(nFFT / 2) {
+                let p = dR[b] * dR[b] + dI[b] * dI[b]
+                rawDP[b] = p
+                if p > maxDP { maxDP = p }
+            }
+            let regFloor = 0.08 * maxDP
+            directPower = rawDP.map { $0 + regFloor }
+        }
+
         let binHz = sampleRateHz / Double(nFFT)
         let minBin = max(1, Int(ceil(450.0 / binHz)))
         let maxBin = min(nFFT / 2 - 1, Int(floor(12_000.0 / binHz)))
@@ -224,13 +252,19 @@ public struct OnDeviceAcousticClassifier: Sendable {
         var weightedFreqSum = 0.0
         var powerSum = 1e-15
         var maxBinPower = -1.0
-        var dominantFreq = 2_000.0
+        var dominantFreq = 2_150.0
         var midBandPower = 1e-15
         var highBandPower = 1e-15
 
         if maxBin > minBin {
             for b in minBin...maxBin {
-                let p = real[b] * real[b] + imag[b] * imag[b]
+                let rawP = real[b] * real[b] + imag[b] * imag[b]
+                let p: Double
+                if let dp = directPower {
+                    p = rawP / dp[b]
+                } else {
+                    p = rawP
+                }
                 let f = Double(b) * binHz
                 weightedFreqSum += f * p
                 powerSum += p

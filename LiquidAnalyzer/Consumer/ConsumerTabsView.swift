@@ -270,6 +270,7 @@ public struct ConsumerMoreView: View {
         NavigationStack {
             Form {
                 Section("Experience") {
+                    Toggle("Auto-Scan When Held Steady", isOn: $consumer.autoScanWhenSteady)
                     Toggle("Auto-Play Chemical Tune on Open", isOn: $consumer.autoPlayTunePreview)
                     Toggle("Vibration Feedback", isOn: $consumer.hapticsEnabled)
                 }

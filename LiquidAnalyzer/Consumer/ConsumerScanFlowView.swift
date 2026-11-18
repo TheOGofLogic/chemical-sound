@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Primary consumer Scan tab implementing AIM -> SCAN -> RESULT -> LISTEN.
+/// Primary consumer Scan tab implementing HOME -> AIM -> SCAN -> RESULT -> LISTEN.
 public struct ConsumerScanFlowView: View {
     @ObservedObject var coordinator: ConsumerScanCoordinator
     @ObservedObject private var cameraService: CameraTargetingService
@@ -26,6 +26,9 @@ public struct ConsumerScanFlowView: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
                 switch coordinator.flowStep {
+                case .home:
+                    homeDashboardScreen
+                        .transition(.opacity)
                 case .aim:
                     aimScreen
                         .transition(.opacity)
@@ -54,58 +57,326 @@ public struct ConsumerScanFlowView: View {
         }
     }
 
-    // MARK: - 1. AIM Screen
+    // MARK: - 0. HOME Dashboard (Matches Visual Reference Poster — Camera OFF Until Requested)
+
+    private var homeDashboardScreen: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                // Hero Logo + Title + Subtitle
+                VStack(spacing: 10) {
+                    HStack(spacing: 14) {
+                        WaterDropSoundLogoView(size: 60)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Liquid Analyzer")
+                                .font(.system(size: 30, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color(red: 0.05, green: 0.13, blue: 0.28))
+
+                            Text("See the liquid. Hear the science.")
+                                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color(red: 0.22, green: 0.42, blue: 0.62))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 10)
+
+                    Text("Use sound waves and your iPhone to explore liquids and hear their mapped composition tune.")
+                        .font(.subheadline)
+                        .foregroundStyle(Color(red: 0.20, green: 0.26, blue: 0.36))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 20)
+
+                // 4 Colorful Step Badges (1 AIM • 2 SCAN • 3 SEE • 4 LISTEN)
+                HStack(alignment: .top, spacing: 8) {
+                    posterStepBadge(
+                        number: "1",
+                        color: LiquidAnalyzerPalette.scanBlue,
+                        title: "AIM",
+                        subtitle: "Point at liquid"
+                    )
+                    posterStepBadge(
+                        number: "2",
+                        color: LiquidAnalyzerPalette.resultGreenStart,
+                        title: "SCAN",
+                        subtitle: "Sound waves"
+                    )
+                    posterStepBadge(
+                        number: "3",
+                        color: LiquidAnalyzerPalette.compositionOrange,
+                        title: "SEE",
+                        subtitle: "Composition"
+                    )
+                    posterStepBadge(
+                        number: "4",
+                        color: LiquidAnalyzerPalette.tunePurple,
+                        title: "LISTEN",
+                        subtitle: "Chemical tune"
+                    )
+                }
+                .padding(.horizontal, 16)
+
+                // Primary Hero CTA Button (Opens Camera Scanner)
+                Button(action: {
+                    coordinator.openCameraAiming(graceDelaySeconds: 0.9)
+                }) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "camera.viewfinder")
+                            .font(.system(size: 22, weight: .bold))
+                        Text("Start Liquid Scan")
+                            .font(.system(size: 19, weight: .bold, design: .rounded))
+                        Spacer()
+                        Image(systemName: "arrow.right.circle.fill")
+                            .font(.system(size: 22, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        LiquidAnalyzerPalette.scanBlue,
+                                        LiquidAnalyzerPalette.scanCyan
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                    )
+                    .shadow(color: LiquidAnalyzerPalette.scanBlue.opacity(0.38), radius: 14, y: 6)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 18)
+
+                // 2x2 Pastel Feature Grid (Matches Bottom of Poster)
+                LazyVGrid(
+                    columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                    spacing: 12
+                ) {
+                    posterFeatureTile(
+                        icon: "camera.fill",
+                        iconColor: LiquidAnalyzerPalette.scanBlue,
+                        bgColor: Color(red: 0.90, green: 0.95, blue: 1.00),
+                        title: "Camera + Sound",
+                        subtitle: "Uses iPhone camera & audio system"
+                    )
+                    posterFeatureTile(
+                        icon: "flask.fill",
+                        iconColor: LiquidAnalyzerPalette.resultGreenStart,
+                        bgColor: Color(red: 0.90, green: 0.98, blue: 0.93),
+                        title: "Identify Liquids",
+                        subtitle: "Water, beverages & reference profiles"
+                    )
+                    posterFeatureTile(
+                        icon: "chart.bar.fill",
+                        iconColor: LiquidAnalyzerPalette.compositionOrange,
+                        bgColor: Color(red: 1.00, green: 0.95, blue: 0.89),
+                        title: "See Composition",
+                        subtitle: "Simple, clear experimental cards"
+                    )
+                    posterFeatureTile(
+                        icon: "music.note",
+                        iconColor: LiquidAnalyzerPalette.tunePurple,
+                        bgColor: Color(red: 0.95, green: 0.91, blue: 1.00),
+                        title: "Hear the Signature",
+                        subtitle: "Play the rainbow Chemical Tune"
+                    )
+                }
+                .padding(.horizontal, 18)
+
+                // Quick Resume Card if user has a recent scan
+                if let latest = coordinator.history.first {
+                    Button(action: {
+                        coordinator.openHistoryItem(latest)
+                    }) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(LiquidAnalyzerPalette.resultGreenStart)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Last Scan: \(latest.title)")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(Color(red: 0.08, green: 0.13, blue: 0.22))
+                                Text("\(latest.formulaDisplay) • Tap to view or play tune")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color.white)
+                                .shadow(color: Color.black.opacity(0.05), radius: 8, y: 3)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 18)
+                }
+
+                // Bottom Poster Banner
+                VStack(spacing: 4) {
+                    Text("REAL SCIENCE. A SIMPLER WAY.")
+                        .font(.caption.weight(.heavy))
+                        .tracking(0.8)
+                        .foregroundStyle(Color(red: 0.10, green: 0.20, blue: 0.36))
+                    Text("For Research and Education")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+                .padding(.bottom, 22)
+            }
+        }
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(red: 0.95, green: 0.98, blue: 1.00),
+                    Color.white,
+                    Color(red: 0.91, green: 0.96, blue: 1.00)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
+    }
+
+    private func posterStepBadge(
+        number: String,
+        color: Color,
+        title: String,
+        subtitle: String
+    ) -> some View {
+        VStack(spacing: 5) {
+            Text(number)
+                .font(.system(size: 16, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(color))
+
+            Text(title)
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(Color(red: 0.08, green: 0.14, blue: 0.25))
+
+            Text(subtitle)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
+        )
+    }
+
+    private func posterFeatureTile(
+        icon: String,
+        iconColor: Color,
+        bgColor: Color,
+        title: String,
+        subtitle: String
+    ) -> some View {
+        VStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(iconColor)
+                .frame(height: 28)
+
+            Text(title)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(iconColor)
+                .multilineTextAlignment(.center)
+
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(Color(red: 0.25, green: 0.30, blue: 0.38))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity, minHeight: 104)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(bgColor)
+        )
+    }
+
+    // MARK: - 1. AIM Screen (`< Liquid Analyzer ⚙` — Auto-Locks on Steady Target OR Tap SCAN)
 
     private var aimScreen: some View {
         VStack(spacing: 0) {
-            topBrandHeader(showSettingsGear: true)
+            topBrandHeader(showBackButton: true, showSettingsGear: true) {
+                coordinator.returnToHome()
+            }
 
             ZStack {
                 cameraService.previewLayerView
                     .ignoresSafeArea(edges: .horizontal)
 
-                // Subtle top & bottom vignette for crisp legibility
                 LinearGradient(
                     colors: [
                         Color.black.opacity(0.28),
                         Color.clear,
                         Color.clear,
-                        Color.black.opacity(0.52)
+                        Color.black.opacity(0.56)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
 
                 VStack(spacing: 18) {
-                    Spacer(minLength: 16)
+                    Spacer(minLength: 14)
 
-                    // Clean blue targeting frame over the liquid
-                    TargetingReticleView()
+                    // Live targeting reticle turns Emerald-Cyan as user holds steady on liquid
+                    TargetingReticleView(lockProgress: cameraService.targetLockProgress)
                         .frame(width: 228, height: 248)
 
-                    // Single simple instruction: "Aim at the liquid"
-                    Text("Aim at the liquid")
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 11)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.black.opacity(0.62))
-                        )
+                    // Dynamic instruction pill ("Aim at the liquid" -> "Hold steady..." -> Auto-scans!)
+                    HStack(spacing: 8) {
+                        if cameraService.targetLockProgress >= 0.25 {
+                            ProgressView()
+                                .tint(.white)
+                                .scaleEffect(0.8)
+                        }
+                        Text(cameraService.aimInstructionText)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 11)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(
+                                cameraService.targetLockProgress >= 0.25
+                                    ? LiquidAnalyzerPalette.resultGreenStart.opacity(0.86)
+                                    : Color.black.opacity(0.64)
+                            )
+                    )
+                    .animation(.easeInOut(duration: 0.18), value: cameraService.aimInstructionText)
 
                     Spacer()
 
-                    // Large primary SCAN button
+                    // Manual one-tap SCAN button (can also tap immediately without waiting for auto-lock)
                     Button(action: {
                         coordinator.beginScan()
                     }) {
                         HStack(spacing: 10) {
                             Image(systemName: "waveform")
                                 .font(.system(size: 20, weight: .bold))
-                            Text("SCAN")
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
-                                .tracking(1.0)
+                            Text("SCAN NOW")
+                                .font(.system(size: 19, weight: .bold, design: .rounded))
+                                .tracking(0.8)
                         }
                         .foregroundStyle(.white)
                         .frame(maxWidth: 280)
@@ -127,19 +398,13 @@ public struct ConsumerScanFlowView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Text("Camera guides aiming • Sound waves measure the liquid")
+                    Text("Hold steady to auto-scan or tap SCAN NOW")
                         .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.85))
-                        .padding(.bottom, 18)
+                        .foregroundStyle(.white.opacity(0.88))
+                        .padding(.bottom, 16)
                 }
                 .padding(.horizontal, 20)
             }
-        }
-        .onAppear {
-            cameraService.startCamera()
-        }
-        .onDisappear {
-            cameraService.stopCamera()
         }
     }
 
@@ -159,7 +424,7 @@ public struct ConsumerScanFlowView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                topBrandHeader(showSettingsGear: false)
+                topBrandHeader(showBackButton: false, showSettingsGear: false, onBack: nil)
 
                 Spacer()
 
@@ -177,7 +442,6 @@ public struct ConsumerScanFlowView: View {
                 }
                 .padding(.top, 16)
 
-                // Clean animated blue progress bar
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule(style: .continuous)
@@ -196,7 +460,7 @@ public struct ConsumerScanFlowView: View {
                                 width: max(22, geo.size.width * CGFloat(min(1.0, max(0.05, coordinator.scanProgress)))),
                                 height: 12
                             )
-                            .animation(.easeOut(duration: 0.25), value: coordinator.scanProgress)
+                            .animation(.easeOut(duration: 0.22), value: coordinator.scanProgress)
                     }
                 }
                 .frame(height: 12)
@@ -228,13 +492,13 @@ public struct ConsumerScanFlowView: View {
 
     private func resultScreen(for item: ConsumerScanItem) -> some View {
         VStack(spacing: 0) {
-            topBrandHeader(showSettingsGear: true)
+            topBrandHeader(showBackButton: true, showSettingsGear: true) {
+                coordinator.returnToHome()
+            }
 
             ScrollView {
                 VStack(spacing: 16) {
-                    // Main Result Card
                     VStack(spacing: 0) {
-                        // Top Status Banner (Green for completed result, Amber for unmatched/rescan)
                         HStack {
                             Text(resultBannerTitle(for: item.status))
                                 .font(.title3.weight(.bold))
@@ -249,16 +513,15 @@ public struct ConsumerScanFlowView: View {
                         .background(resultBannerGradient(for: item.status))
 
                         VStack(spacing: 14) {
-                            // Liquid Name & Formula
                             VStack(spacing: 4) {
                                 Text(item.title)
                                     .font(.system(size: 28, weight: .bold, design: .rounded))
-                                    .foregroundStyle(Color.primary)
+                                    .foregroundStyle(Color(red: 0.06, green: 0.10, blue: 0.18))
                                     .multilineTextAlignment(.center)
 
                                 Text(item.formulaDisplay)
                                     .font(.title3.weight(.semibold))
-                                    .foregroundStyle(Color.secondary)
+                                    .foregroundStyle(Color(red: 0.30, green: 0.36, blue: 0.45))
 
                                 Text(item.statusBadgeText)
                                     .font(.caption.weight(.semibold))
@@ -282,11 +545,9 @@ public struct ConsumerScanFlowView: View {
                             }
                             .padding(.top, 16)
 
-                            // Container Visual Thumbnail / Glass Artwork
                             PlatformThumbnailView(jpegData: item.thumbnailJPEGData, size: 118)
                                 .padding(.vertical, 2)
 
-                            // Separated Orange-Accented Composition Panel
                             if !item.constituents.isEmpty {
                                 VStack(alignment: .leading, spacing: 10) {
                                     HStack {
@@ -319,7 +580,7 @@ public struct ConsumerScanFlowView: View {
                                                     .foregroundStyle(Color(red: 0.16, green: 0.20, blue: 0.28))
                                                 Text(constituent.roleDescription)
                                                     .font(.caption2)
-                                                    .foregroundStyle(.secondary)
+                                                    .foregroundStyle(Color(red: 0.40, green: 0.45, blue: 0.54))
                                             }
                                         }
                                     }
@@ -338,11 +599,10 @@ public struct ConsumerScanFlowView: View {
 
                             Text(item.scientificNote)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color(red: 0.36, green: 0.42, blue: 0.50))
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 20)
 
-                            // Prominent Colorful "♫ Play Chemical Tune" Button
                             if item.status != .unclearScan {
                                 Button(action: {
                                     withAnimation(.easeInOut(duration: 0.24)) {
@@ -382,22 +642,23 @@ public struct ConsumerScanFlowView: View {
                                 .padding(.top, 4)
                             }
 
-                            // Secondary Scan Again Action
-                            Button(action: {
-                                coordinator.resetToAim()
-                            }) {
-                                Label(
-                                    item.status == .unclearScan ? "Try Scan Again" : "Scan Another Liquid",
-                                    systemImage: "arrow.counterclockwise"
-                                )
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
-                                .padding(.vertical, 8)
+                            HStack(spacing: 24) {
+                                Button(action: {
+                                    coordinator.resetToAim()
+                                }) {
+                                    Label(
+                                        item.status == .unclearScan ? "Try Scan Again" : "Scan Another Liquid",
+                                        systemImage: "camera.viewfinder"
+                                    )
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                                    .padding(.vertical, 8)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                             .padding(.bottom, 16)
                         }
-                        .background(Color(red: 0.99, green: 0.99, blue: 1.0))
+                        .background(Color.white)
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .shadow(color: Color.black.opacity(0.10), radius: 16, y: 6)
@@ -412,15 +673,17 @@ public struct ConsumerScanFlowView: View {
 
     // MARK: - Shared Header & Styling Helpers
 
-    private func topBrandHeader(showSettingsGear: Bool) -> some View {
+    private func topBrandHeader(
+        showBackButton: Bool,
+        showSettingsGear: Bool,
+        onBack: (() -> Void)?
+    ) -> some View {
         HStack {
-            if case .result = coordinator.flowStep {
-                Button(action: {
-                    coordinator.resetToAim()
-                }) {
+            if showBackButton, let onBack {
+                Button(action: onBack) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(.white.opacity(0.92))
                         .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
@@ -443,6 +706,7 @@ public struct ConsumerScanFlowView: View {
 
             if showSettingsGear {
                 Button(action: {
+                    coordinator.cameraService.stopCamera()
                     coordinator.selectedTab = .more
                 }) {
                     Image(systemName: "gearshape.fill")

@@ -24,8 +24,8 @@ android {
         applicationId = "org.liquidanalyzer.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = (System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull()) ?: 5
-        versionName = "0.3.0"
+        versionCode = (System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull()) ?: 6
+        versionName = "0.3.1"
     }
 
     signingConfigs {

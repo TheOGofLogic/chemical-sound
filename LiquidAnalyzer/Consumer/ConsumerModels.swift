@@ -8,8 +8,9 @@ public enum ConsumerTab: String, CaseIterable, Hashable, Sendable {
     case more
 }
 
-/// Four-step consumer flow (`AIM -> SCAN -> RESULT -> LISTEN`).
+/// Consumer Scan tab flow (`HOME -> AIM -> SCAN -> RESULT -> LISTEN`).
 public enum ScanFlowStep: Equatable, Sendable {
+    case home
     case aim
     case scanning
     case result(ConsumerScanItem)

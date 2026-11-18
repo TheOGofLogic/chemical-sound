@@ -36,11 +36,29 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
     private let sampleQueue = DispatchQueue(label: "org.liquidanalyzer.camera.frames")
     private let ciContext = CIContext()
     private let frameLock = NSLock()
+
     private var cachedThumbnailJPEG: Data?
-    private var lastFrameCaptureUptime: TimeInterval = 0
+    private var lastThumbnailUptime: TimeInterval = 0
+    private var lastAnalysisUptime: TimeInterval = 0
+    private var previousLumaGrid: [Double]?
+    private var steadyScore: Double = 0.0
+    private var autoLockEnabledAfterUptime: TimeInterval = 0
+    private var didFireLockForCurrentSession = false
     private var isConfigured = false
 
-    func start(onStatusUpdate: @escaping @Sendable (Bool) -> Void) {
+    var onTargetProgress: (@Sendable (Double, Bool) -> Void)?
+
+    func start(
+        graceDelaySeconds: Double,
+        onStatusUpdate: @escaping @Sendable (Bool) -> Void
+    ) {
+        frameLock.lock()
+        previousLumaGrid = nil
+        steadyScore = 0.0
+        didFireLockForCurrentSession = false
+        autoLockEnabledAfterUptime = ProcessInfo.processInfo.systemUptime + graceDelaySeconds
+        frameLock.unlock()
+
         let authStatus = AVCaptureDevice.authorizationStatus(for: .video)
         switch authStatus {
         case .authorized:
@@ -73,6 +91,9 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
                     self.session.addInput(input)
 
                     self.videoOutput.alwaysDiscardsLateVideoFrames = true
+                    self.videoOutput.videoSettings = [
+                        kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+                    ]
                     self.videoOutput.setSampleBufferDelegate(self, queue: self.sampleQueue)
                     if self.session.canAddOutput(self.videoOutput) {
                         self.session.addOutput(self.videoOutput)
@@ -112,11 +133,96 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         from connection: AVCaptureConnection
     ) {
         let now = ProcessInfo.processInfo.systemUptime
-        guard (now - lastFrameCaptureUptime) >= 0.45,
+        guard (now - lastAnalysisUptime) >= 0.16,
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }
-        lastFrameCaptureUptime = now
+        lastAnalysisUptime = now
+
+        // 1. Fast 16x16 center-reticle steadiness & container/surface contrast check
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let basePtr = CVPixelBufferGetBaseAddress(pixelBuffer)
+
+        var currentGrid = [Double](repeating: 0.0, count: 256)
+        var meanLuma = 0.0
+
+        if let basePtr, width >= 64, height >= 64 {
+            let bytes = basePtr.assumingMemoryBound(to: UInt8.self)
+            let roiX0 = width / 4
+            let roiY0 = height / 4
+            let roiW = width / 2
+            let roiH = height / 2
+
+            for gy in 0..<16 {
+                let py = roiY0 + (gy * roiH) / 16
+                let rowOffset = py * bytesPerRow
+                for gx in 0..<16 {
+                    let px = roiX0 + (gx * roiW) / 16
+                    let offset = rowOffset + px * 4
+                    let b = Double(bytes[offset]) / 255.0
+                    let g = Double(bytes[offset + 1]) / 255.0
+                    let r = Double(bytes[offset + 2]) / 255.0
+                    let luma = 0.299 * r + 0.587 * g + 0.114 * b
+                    currentGrid[gy * 16 + gx] = luma
+                    meanLuma += luma
+                }
+            }
+            meanLuma /= 256.0
+        }
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+
+        // Compute spatial contrast inside the reticle (detects cup rim, glass wall, or liquid meniscus/glint)
+        var gradientSum = 0.0
+        for gy in 0..<15 {
+            for gx in 0..<15 {
+                let c = currentGrid[gy * 16 + gx]
+                let dx = abs(currentGrid[gy * 16 + (gx + 1)] - c)
+                let dy = abs(currentGrid[(gy + 1) * 16 + gx] - c)
+                gradientSum += (dx + dy)
+            }
+        }
+        let spatialContrast = gradientSum / (2.0 * 225.0)
+
+        frameLock.lock()
+        let prev = previousLumaGrid
+        previousLumaGrid = currentGrid
+        let armed = now >= autoLockEnabledAfterUptime
+        let alreadyFired = didFireLockForCurrentSession
+
+        var motionDiff = 1.0
+        if let prev, prev.count == 256 {
+            var diffSum = 0.0
+            for i in 0..<256 {
+                diffSum += abs(currentGrid[i] - prev[i])
+            }
+            motionDiff = diffSum / 256.0
+        }
+
+        // Steady hand + visible container/liquid structure (not pitch black or covered lens)
+        let isSteadyOnTarget = armed && meanLuma > 0.06 && spatialContrast > 0.012 && motionDiff < 0.048
+        if isSteadyOnTarget {
+            steadyScore = min(1.0, steadyScore + 0.22)
+        } else {
+            steadyScore = max(0.0, steadyScore - 0.30)
+        }
+
+        let currentScore = steadyScore
+        var fireNow = false
+        if currentScore >= 1.0 && !alreadyFired {
+            didFireLockForCurrentSession = true
+            fireNow = true
+        }
+        let callback = onTargetProgress
+        frameLock.unlock()
+
+        callback?(currentScore, fireNow)
+
+        // 2. Periodically refresh silent JPEG thumbnail (~every 0.45 s)
+        guard (now - lastThumbnailUptime) >= 0.45 else { return }
+        lastThumbnailUptime = now
 
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
         let extent = ciImage.extent
@@ -133,8 +239,7 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         let scaled = ciImage.cropped(to: cropRect).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cgImg = ciContext.createCGImage(scaled, from: scaled.extent) else { return }
 
-        let jpeg = UIImage(cgImage: cgImg).jpegData(compressionQuality: 0.72)
-        if let jpeg {
+        if let jpeg = UIImage(cgImage: cgImg).jpegData(compressionQuality: 0.74) {
             frameLock.lock()
             cachedThumbnailJPEG = jpeg
             frameLock.unlock()
@@ -161,21 +266,44 @@ public struct LiveCameraPreviewRepresentable: UIViewRepresentable {
 }
 #endif
 
-/// Manages camera preview for visual targeting on the AIM screen.
-/// Uses silent video-frame caching (zero shutter sound, zero blocking continuations) and never touches AVAudioSession.
+/// Manages camera preview and automatic steady-target lock on the AIM screen.
+/// Uses silent video-frame analysis (zero shutter sound) and never touches AVAudioSession.
 @MainActor
 public final class CameraTargetingService: ObservableObject {
     @Published public private(set) var isCameraLive: Bool = false
+    @Published public private(set) var targetLockProgress: Double = 0.0
+    @Published public private(set) var aimInstructionText: String = "Aim at the liquid"
+
+    public var onAutoTargetLocked: (() -> Void)?
 
     #if os(iOS)
     private let worker = CameraSessionWorker()
     #endif
 
-    public init() {}
-
-    public func startCamera() {
+    public init() {
         #if os(iOS)
-        worker.start { [weak self] live in
+        worker.onTargetProgress = { [weak self] progress, didLock in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.targetLockProgress = progress
+                if didLock {
+                    self.aimInstructionText = "Liquid Detected — Scanning..."
+                    self.onAutoTargetLocked?()
+                } else if progress >= 0.25 {
+                    self.aimInstructionText = "Hold steady — locking target..."
+                } else {
+                    self.aimInstructionText = "Aim at the liquid"
+                }
+            }
+        }
+        #endif
+    }
+
+    public func startCamera(graceDelaySeconds: Double = 0.8) {
+        targetLockProgress = 0.0
+        aimInstructionText = "Aim at the liquid"
+        #if os(iOS)
+        worker.start(graceDelaySeconds: graceDelaySeconds) { [weak self] live in
             Task { @MainActor [weak self] in
                 self?.isCameraLive = live
             }
@@ -186,6 +314,7 @@ public final class CameraTargetingService: ObservableObject {
     }
 
     public func stopCamera() {
+        targetLockProgress = 0.0
         #if os(iOS)
         worker.stop()
         #endif

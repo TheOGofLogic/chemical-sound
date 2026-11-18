@@ -1,5 +1,8 @@
 import Combine
 import Foundation
+#if os(iOS)
+import UIKit
+#endif
 
 /// Persists consumer scan items locally on disk for the History tab.
 public final class ConsumerHistoryStore: @unchecked Sendable {
@@ -43,15 +46,16 @@ public final class ConsumerHistoryStore: @unchecked Sendable {
     }
 }
 
-/// Orchestrates the consumer AIM -> SCAN -> RESULT -> LISTEN experience on top of the Layer 2 Research Engine.
+/// Orchestrates the consumer HOME -> AIM -> SCAN -> RESULT -> LISTEN experience on top of the Layer 2 Research Engine.
 @MainActor
 public final class ConsumerScanCoordinator: ObservableObject {
     @Published public var selectedTab: ConsumerTab = .scan
-    @Published public var flowStep: ScanFlowStep = .aim
+    @Published public var flowStep: ScanFlowStep = .home
     @Published public private(set) var scanProgress: Double = 0.0
     @Published public var consumerAlertMessage: String?
     @Published public private(set) var history: [ConsumerScanItem] = []
     @Published public var autoPlayTunePreview: Bool = true
+    @Published public var autoScanWhenSteady: Bool = true
     @Published public var hapticsEnabled: Bool = true
     @Published public var isResearchConsolePresented: Bool = false
 
@@ -73,18 +77,43 @@ public final class ConsumerScanCoordinator: ObservableObject {
         historyStore: ConsumerHistoryStore? = nil
     ) {
         self.researchCoordinator = researchCoordinator
-        self.cameraService = cameraService ?? CameraTargetingService()
+        let resolvedCam = cameraService ?? CameraTargetingService()
+        self.cameraService = resolvedCam
         self.tunePlayer = tunePlayer ?? ChemicalTunePlayer()
         self.classifier = classifier
         let resolvedStore = historyStore ?? ConsumerHistoryStore()
         self.historyStore = resolvedStore
         self.history = resolvedStore.loadAll()
+
+        resolvedCam.onAutoTargetLocked = { [weak self] in
+            guard let self, self.autoScanWhenSteady, case .aim = self.flowStep else { return }
+            self.triggerLightHaptic()
+            self.beginScan()
+        }
+    }
+
+    public func openCameraAiming(graceDelaySeconds: Double = 0.9) {
+        tunePlayer.stop()
+        consumerAlertMessage = nil
+        scanProgress = 0.0
+        flowStep = .aim
+        cameraService.startCamera(graceDelaySeconds: graceDelaySeconds)
+    }
+
+    public func returnToHome() {
+        activeScanTask?.cancel()
+        activeScanTask = nil
+        cameraService.stopCamera()
+        tunePlayer.stop()
+        scanProgress = 0.0
+        flowStep = .home
     }
 
     public func beginScan() {
         guard activeScanTask == nil else { return }
         tunePlayer.stop()
         consumerAlertMessage = nil
+        triggerLightHaptic()
 
         // Grab latest silent preview thumbnail synchronously BEFORE transitioning away from AIM
         let thumbnailData = cameraService.latestTargetingThumbnail()
@@ -108,14 +137,19 @@ public final class ConsumerScanCoordinator: ObservableObject {
             await researchCoordinator.audioEngine.abortImmediately()
         }
         scanProgress = 0.0
-        flowStep = .aim
+        openCameraAiming(graceDelaySeconds: 2.0)
     }
 
     public func resetToAim() {
-        tunePlayer.stop()
-        consumerAlertMessage = nil
-        scanProgress = 0.0
-        flowStep = .aim
+        openCameraAiming(graceDelaySeconds: 1.8)
+    }
+
+    private func triggerLightHaptic() {
+        #if os(iOS)
+        guard hapticsEnabled else { return }
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+        #endif
     }
 
     public func openHistoryItem(_ item: ConsumerScanItem) {

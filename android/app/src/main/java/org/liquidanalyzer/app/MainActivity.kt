@@ -74,7 +74,7 @@ private val TunePurple = Color(0xFF843BF2)
 private val TuneMagenta = Color(0xFFE02E9E)
 
 enum class PrimaryTab { SCAN, HISTORY, LEARN, MORE }
-enum class ScanScreenState { AIM, SCANNING, RESULT, TUNE }
+enum class ScanScreenState { HOME, AIM, SCANNING, RESULT, TUNE }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -94,7 +94,7 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
     val scope = rememberCoroutineScope()
 
     var selectedTab by remember { mutableStateOf(PrimaryTab.SCAN) }
-    var flowState by remember { mutableStateOf(ScanScreenState.AIM) }
+    var flowState by remember { mutableStateOf(ScanScreenState.HOME) }
     var scanProgress by remember { mutableFloatStateOf(0f) }
     var currentResult by remember { mutableStateOf<ScanResultItem?>(null) }
     var history by remember { mutableStateOf(listOf<ScanResultItem>()) }
@@ -138,11 +138,7 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
         }
     }
 
-    LaunchedEffect(Unit) {
-        if (!hasCameraPerm) {
-            permLauncher.launch(arrayOf(Manifest.permission.CAMERA))
-        }
-    }
+    // Camera permission is requested only when user taps "Start Liquid Scan" on Home screen
 
     Scaffold(
         bottomBar = {
@@ -178,8 +174,17 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
             when (selectedTab) {
                 PrimaryTab.SCAN -> {
                     when (flowState) {
+                        ScanScreenState.HOME -> HomeDashboardScreen(
+                            onStartScan = {
+                                if (!hasCameraPerm) {
+                                    permLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                                }
+                                flowState = ScanScreenState.AIM
+                            }
+                        )
                         ScanScreenState.AIM -> AimScreen(
                             hasCameraPerm = hasCameraPerm,
+                            onBack = { flowState = ScanScreenState.HOME },
                             onGear = { selectedTab = PrimaryTab.MORE },
                             onScan = {
                                 val hasMic = ContextCompat.checkSelfPermission(
@@ -353,13 +358,83 @@ private fun TopHeaderBar(
 }
 
 @Composable
+private fun HomeDashboardScreen(onStartScan: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(Color(0xFFF2F8FF), Color.White, Color(0xFFE8F4FF))))
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Column {
+            Text("Liquid Analyzer", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, color = HeaderNavy)
+            Text("See the liquid. Hear the science.", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF386B9E))
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                "Use sound waves and your phone to explore liquids and hear their mapped composition tune.",
+                fontSize = 14.sp,
+                color = Color(0xFF334155)
+            )
+        }
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StepPill(Modifier.weight(1f), "1", "AIM", ScanBlue)
+            StepPill(Modifier.weight(1f), "2", "SCAN", ResultGreen1)
+            StepPill(Modifier.weight(1f), "3", "SEE", CompOrange)
+            StepPill(Modifier.weight(1f), "4", "LISTEN", TunePurple)
+        }
+
+        Button(
+            onClick = onStartScan,
+            shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+            contentPadding = PaddingValues(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(58.dp)
+                .background(Brush.horizontalGradient(listOf(ScanBlue, ScanCyan)), RoundedCornerShape(18.dp))
+        ) {
+            Icon(Icons.Default.CameraAlt, contentDescription = null, tint = Color.White)
+            Spacer(modifier = Modifier.width(10.dp))
+            Text("Start Liquid Scan", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+        }
+
+        LearnCardItem("Camera + Sound", "Uses camera framing and built-in acoustic transducers.", ScanBlue)
+        LearnCardItem("Identify Liquids", "Water, beverages, and calibrated reference profiles.", ResultGreen1)
+        LearnCardItem("See Composition", "Simple, clear experimental constituent cards.", CompOrange)
+        LearnCardItem("Hear the Signature", "Play the rainbow Chemical Tune.", TunePurple)
+    }
+}
+
+@Composable
+private fun StepPill(modifier: Modifier, num: String, label: String, color: Color) {
+    Card(modifier = modifier, shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier.size(30.dp).background(color, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(num, color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(label, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = HeaderNavy)
+        }
+    }
+}
+
+@Composable
 private fun AimScreen(
     hasCameraPerm: Boolean,
+    onBack: () -> Unit,
     onGear: () -> Unit,
     onScan: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        TopHeaderBar(title = "Liquid Analyzer", onGear = onGear)
+        TopHeaderBar(title = "Liquid Analyzer", onBack = onBack, onGear = onGear)
 
         Box(modifier = Modifier.fillMaxSize().background(Color(0xFFCFD8E3))) {
             if (hasCameraPerm) {
