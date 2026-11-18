@@ -5,7 +5,9 @@
 Controlled implementation of **Liquid Analyzer Phase 1 v1.2 (`CS-SPEC-P1-v1.2`)**, covering:
 - **Milestone 1:** Frozen v1.2 Specification & Milestone 4 Stop/Go Gate Report (`docs/`).
 - **Milestone 2:** Authoritative offline Python DSP, quality-control, and open-set evaluation reference pipeline (`src/liquid_analyzer/`).
-- **Milestone 3A:** Minimal Swift Acquisition iOS Instrument (`LiquidAnalyzer/`, `Assets/`, `LiquidAnalyzerTests/`, Build `4`), strictly separated from classification so Milestone 3B bench audio characterization and Milestone 3C adjustable `Mode B` fixture experiments can be measured empirically.
+- **Milestone 3A:** Minimal Swift Acquisition iOS Instrument + Two-Layer Consumer Experience (`LiquidAnalyzer/`, `Assets/`, `LiquidAnalyzerTests/`, v0.3.0 / Build `5`):
+  - **Layer 1 (Consumer Interface):** `Scan | History | Learn | More` navigation implementing **AIM → SCAN → RESULT → LISTEN (Chemical Tune)** with zero exposed laboratory jargon.
+  - **Layer 2 (Research Engine):** Deterministic 22-state acquisition machine, SHA-256 stimulus verification, `48 kHz` `.measurement` capture, signal QC, experimental reference matching, and a protected **Research & Developer Mode** console inside **More** so Milestone 3B bench characterization and Milestone 3C `Mode B` fixture experiments remain intact.
 - **First Classification Milestone (Milestone 4 / Gate 0B):** Preregistered two-liquid fresh-fill feasibility evaluation (`H2O_DIST` vs. `OIL_VEG`) across `>= 4` independent preparations/class, `>= 2` sessions, and unseen holdout containers, gated by M3B instrument validation and Gate 0A 5-state signal-path isolation.
 
 ---
@@ -31,9 +33,10 @@ chemical-sound/
 │   ├── SIG_ESS_v1_inverse.wav           # 200 ms matched inverse filter
 │   ├── SIG_STEP_v1.wav                  # 1000 ms stepped tones (10 x [60 ms tone + 40 ms silent gap])
 │   └── SIG_SIL_v1.wav                   # 200 ms digital-zero silence control
-├── LiquidAnalyzer/                      # Milestone 3A Minimal Swift iOS Acquisition Instrument (Build 4)
+├── LiquidAnalyzer/                      # Two-Layer iOS Application (v0.3.0 / Build 5)
 │   ├── App/                             # LiquidAnalyzerApp, AppCoordinator (scenePhase monitor)
-│   ├── Domain/                          # 22 states, events, failures, flags, ScanRecord parity
+│   ├── Consumer/                        # Layer 1: AIM -> SCAN -> RESULT -> LISTEN (Chemical Tune) + 4-tab UI
+│   ├── Domain/                          # Layer 2: 22 states, events, failures, flags, ScanRecord parity
 │   ├── StateMachine/                    # TransitionRule, AcquisitionStateMachine, TransitionAuditRecord
 │   ├── Waveforms/                       # CryptoKit SHA256Verifier, WaveformRepository
 │   ├── Audio/                           # AudioSessionController, RouteValidator, Lock-safe RecordingController
@@ -41,8 +44,8 @@ chemical-sound/
 │   ├── Calibration/                     # CalibrationManager (SESSION_OPEN -> SESSION_VALID / DRIFT)
 │   ├── QualityControl/                  # QualityControlEngine, ImmediateAudioAnalyzer, MetadataValidator
 │   ├── Persistence/                     # Atomic AcquisitionStore, AuditLogger, SHA-256 ExportManager
-│   └── UI/                              # SwiftUI Setup, Calibration, Sample/Fixture, Acquire, Audit, Export
-├── LiquidAnalyzerTests/                 # Swift XCTest suite (State, SHA-256, Route, QC, Export)
+│   └── UI/                              # Protected Research / Developer Mode Bench Views
+├── LiquidAnalyzerTests/                 # Swift XCTest suite (Consumer, Tune, State, SHA-256, Route, QC, Export)
 ├── Package.swift                        # Swift Package manifest (LiquidAnalyzer — iOS 17+ / macOS 14+)
 ├── project.yml                          # XcodeGen iOS App specification (org.chemicalsound.acquisition)
 ├── reference_waveforms/                 # Framed 500 ms / 1300 ms Python reference bundle

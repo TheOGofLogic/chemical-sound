@@ -19,15 +19,17 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.2.0</string>
+    <string>0.3.0</string>
     <key>CFBundleVersion</key>
-    <string>4</string>
+    <string>5</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Liquid Analyzer uses the camera to help you aim at the liquid container. Acoustic sound-wave measurements—not the camera image—provide the analysis signal.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Liquid Analyzer captures controlled short acoustic response windows (0.5–1.3 s) during research calibration and liquid sample excitation.</string>
+    <string>Liquid Analyzer uses the microphone to capture sound-wave reflections from the liquid container during a scan.</string>
     <key>UIFileSharingEnabled</key>
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
