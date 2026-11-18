@@ -36,6 +36,8 @@ public struct VisualContextSummary: Equatable, Sendable {
     public let innerSaturationWB: Double
     public let innerHueDegrees: Double
     public let innerBrightness: Double
+    public let innerSpatialContrast: Double
+    public let rimContrast: Double
 
     public static let audioOnlyDefault = VisualContextSummary(
         hint: .audioOnly,
@@ -45,7 +47,9 @@ public struct VisualContextSummary: Equatable, Sendable {
         hasBarcode: false,
         innerSaturationWB: 0.0,
         innerHueDegrees: 0.0,
-        innerBrightness: 0.5
+        innerBrightness: 0.5,
+        innerSpatialContrast: 0.02,
+        rimContrast: 0.04
     )
 }
 
@@ -250,7 +254,9 @@ public struct VisualLiquidContextAnalyzer: Sendable {
             hasBarcode: barcode,
             innerSaturationWB: optics.innerSaturationWB,
             innerHueDegrees: optics.innerHueDegrees,
-            innerBrightness: optics.innerBrightness
+            innerBrightness: optics.innerBrightness,
+            innerSpatialContrast: sqrt(optics.innerVariance),
+            rimContrast: optics.annularRimThirdQuadrant
         )
     }
 

@@ -39,6 +39,8 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
 
     private var cachedThumbnailJPEG: Data?
     private var cachedSceneContextJPEG: Data?
+    private var videoDevice: AVCaptureDevice?
+    private var opticsLocked: Bool = false
     private var lastThumbnailUptime: TimeInterval = 0
     private var lastAnalysisUptime: TimeInterval = 0
     private var previousLumaGrid: [Double]?
@@ -89,6 +91,7 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
                 if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
                    let input = try? AVCaptureDeviceInput(device: device),
                    self.session.canAddInput(input) {
+                    self.videoDevice = device
                     self.session.addInput(input)
 
                     self.videoOutput.alwaysDiscardsLateVideoFrames = true
@@ -132,6 +135,45 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         frameLock.lock()
         defer { frameLock.unlock() }
         return cachedSceneContextJPEG
+    }
+
+    func setOpticsLocked(_ locked: Bool, completion: @escaping @Sendable (Bool) -> Void) {
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.videoDevice else {
+                completion(false)
+                return
+            }
+            do {
+                try device.lockForConfiguration()
+                if locked {
+                    if device.isFocusModeSupported(.locked) {
+                        device.focusMode = .locked
+                    }
+                    if device.isExposureModeSupported(.locked) {
+                        device.exposureMode = .locked
+                    }
+                    if device.isWhiteBalanceModeSupported(.locked) {
+                        device.whiteBalanceMode = .locked
+                    }
+                    self.opticsLocked = true
+                } else {
+                    if device.isFocusModeSupported(.continuousAutoFocus) {
+                        device.focusMode = .continuousAutoFocus
+                    }
+                    if device.isExposureModeSupported(.continuousAutoExposure) {
+                        device.exposureMode = .continuousAutoExposure
+                    }
+                    if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                        device.whiteBalanceMode = .continuousAutoWhiteBalance
+                    }
+                    self.opticsLocked = false
+                }
+                device.unlockForConfiguration()
+                completion(self.opticsLocked)
+            } catch {
+                completion(self.opticsLocked)
+            }
+        }
     }
 
     func captureOutput(
@@ -294,6 +336,7 @@ public final class CameraTargetingService: ObservableObject {
     @Published public private(set) var isCameraLive: Bool = false
     @Published public private(set) var targetLockProgress: Double = 0.0
     @Published public private(set) var aimInstructionText: String = "Aim at the liquid"
+    @Published public private(set) var isOpticsLocked: Bool = false
 
     public var onAutoTargetLocked: (() -> Void)?
 
@@ -356,6 +399,19 @@ public final class CameraTargetingService: ObservableObject {
         return worker.latestSceneContextJPEG()
         #else
         return nil
+        #endif
+    }
+
+    public func toggleOpticsLock() {
+        let nextState = !isOpticsLocked
+        #if os(iOS)
+        worker.setOpticsLocked(nextState) { [weak self] actualLocked in
+            Task { @MainActor [weak self] in
+                self?.isOpticsLocked = actualLocked
+            }
+        }
+        #else
+        isOpticsLocked = nextState
         #endif
     }
 

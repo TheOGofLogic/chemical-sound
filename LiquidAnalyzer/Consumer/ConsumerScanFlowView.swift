@@ -348,8 +348,50 @@ public struct ConsumerScanFlowView: View {
                     endPoint: .bottom
                 )
 
-                VStack(spacing: 18) {
-                    Spacer(minLength: 14)
+                VStack(spacing: 16) {
+                    HStack(spacing: 10) {
+                        Button(action: {
+                            coordinator.startRepeatabilityGateR1Batch(count: 20)
+                        }) {
+                            Label("Run R1 (20x)", systemImage: "repeat.circle.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 13)
+                                .padding(.vertical, 8)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.84))
+                                )
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button(action: {
+                            cameraService.toggleOpticsLock()
+                        }) {
+                            Label(
+                                cameraService.isOpticsLocked ? "AE/AF/WB Locked" : "Lock AE/AF/WB",
+                                systemImage: cameraService.isOpticsLocked ? "lock.fill" : "lock.open"
+                            )
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(
+                                        cameraService.isOpticsLocked
+                                            ? LiquidAnalyzerPalette.resultGreenStart.opacity(0.90)
+                                            : Color.black.opacity(0.56)
+                                    )
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 10)
+
+                    Spacer(minLength: 6)
 
                     // Live targeting reticle turns Emerald-Cyan as user holds steady on liquid
                     TargetingReticleView(lockProgress: cameraService.targetLockProgress)
@@ -445,13 +487,15 @@ public struct ConsumerScanFlowView: View {
                     .frame(height: 250)
 
                 VStack(spacing: 8) {
-                    Text("Analyzing Liquid...")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                    Text(coordinator.scanningStatusTitle)
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
 
-                    Text("Listening to sound-wave reflections")
+                    Text(coordinator.scanningStatusSubtitle)
                         .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.70))
+                        .foregroundStyle(.white.opacity(0.74))
+                        .multilineTextAlignment(.center)
                 }
                 .padding(.top, 16)
 
@@ -616,7 +660,66 @@ public struct ConsumerScanFlowView: View {
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 20)
 
-                            if item.status != .unclearScan && item.status != .nonLiquidMaterial {
+                            if let feat = item.measuredFeatures {
+                                DisclosureGroup("Repeatability Gate R1 Telemetry") {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        if let seq = item.scanSequenceNumber {
+                                            r1Row("Scan #", "#\(seq)")
+                                        }
+                                        r1Row("Primary Peak", String(format: "%.1f Hz", feat.dominantPeakHz))
+                                        r1Row(
+                                            "Secondary Peaks",
+                                            feat.secondaryPeaksHz.isEmpty
+                                                ? "None"
+                                                : feat.secondaryPeaksHz.map { String(format: "%.0f Hz", $0) }.joined(separator: ", ")
+                                        )
+                                        r1Row(
+                                            "Amplitude / SNR",
+                                            String(format: "%.1f dBFS (pk %.1f) • SNR %.1f dB", feat.activeRMSDBFS, feat.peakDBFS, feat.activeSNRDB)
+                                        )
+                                        r1Row(
+                                            "Echo / Scatter",
+                                            String(format: "Echo %.1f dB • HF %.1f dB", feat.echoReturnDB, feat.highFreqBubbleScatterDB)
+                                        )
+                                        r1Row(
+                                            "Container Mode",
+                                            String(format: "Cent %.0f Hz • Decay %.0f dB/s • Cav %.1f dB", feat.spectralCentroidHz, feat.decaySlopeDBPerSec, feat.cavityMultipathDB)
+                                        )
+                                        r1Row(
+                                            "Vector / Checksum",
+                                            "[\(feat.subBandShapeDB.map { String(format: "%+.1f", $0) }.joined(separator: ","))] • \(feat.featureVectorChecksum)"
+                                        )
+                                        if let top = item.topCandidateName, let td = item.topCandidateDistance {
+                                            r1Row("Top Candidate", String(format: "%@ (d=%.3f)", top, td))
+                                        }
+                                        if let sec = item.runnerUpTitle, let sd = item.secondCandidateDistance {
+                                            r1Row("Second Candidate", String(format: "%@ (d=%.3f)", sec, sd))
+                                        }
+                                        if let margin = item.winningMargin {
+                                            r1Row("Winning Margin", String(format: "+%.3f", margin))
+                                        }
+                                        if let allScores = item.allCandidateDistances, !allScores.isEmpty {
+                                            Text("Raw Scores: " + allScores.prefix(6).map { "\($0.displayName)=\(String(format: "%.2f", $0.distance))" }.joined(separator: " | "))
+                                                .font(.system(size: 10, design: .monospaced))
+                                                .foregroundStyle(.secondary)
+                                                .padding(.top, 2)
+                                        }
+                                    }
+                                    .font(.caption2)
+                                    .padding(.top, 6)
+                                }
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color(red: 0.24, green: 0.30, blue: 0.42))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Color(red: 0.96, green: 0.97, blue: 0.99))
+                                )
+                                .padding(.horizontal, 16)
+                            }
+
+                            if item.status != .unclearScan && item.status != .nonLiquidMaterial && item.status != .emptyContainer {
                                 Button(action: {
                                     withAnimation(.easeInOut(duration: 0.24)) {
                                         activeTuneItem = item
@@ -675,14 +778,14 @@ public struct ConsumerScanFlowView: View {
                                     Button(action: {
                                         calibrationTargetItem = item
                                     }) {
-                                        Label("Calibrate Known Standard", systemImage: "scope")
+                                        Label("Calibrate Setup (Empty / Water / Salt...)", systemImage: "scope")
                                             .font(.caption.weight(.semibold))
-                                            .foregroundStyle(Color(red: 0.36, green: 0.42, blue: 0.54))
-                                            .padding(.horizontal, 14)
-                                            .padding(.vertical, 6)
+                                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 8)
                                             .background(
                                                 Capsule(style: .continuous)
-                                                    .fill(Color(red: 0.93, green: 0.95, blue: 0.98))
+                                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
                                             )
                                     }
                                     .buttonStyle(.plain)
@@ -756,12 +859,25 @@ public struct ConsumerScanFlowView: View {
         .background(LiquidAnalyzerPalette.headerNavy)
     }
 
+    private func r1Row(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
     private func resultBannerTitle(for status: ConsumerMatchStatus) -> String {
         switch status {
         case .referenceMatch:
             return "Result"
         case .unmatchedSignature:
             return "Acoustic Profile"
+        case .emptyContainer:
+            return "Empty Container"
         case .nonLiquidMaterial:
             return "Non-Liquid Surface"
         case .unclearScan:
@@ -775,6 +891,8 @@ public struct ConsumerScanFlowView: View {
             return "checkmark.circle.fill"
         case .unmatchedSignature:
             return "waveform.circle.fill"
+        case .emptyContainer:
+            return "cup.and.saucer"
         case .nonLiquidMaterial:
             return "cube.fill"
         case .unclearScan:
@@ -793,6 +911,12 @@ public struct ConsumerScanFlowView: View {
         case .unmatchedSignature:
             return LinearGradient(
                 colors: [LiquidAnalyzerPalette.scanBlue, LiquidAnalyzerPalette.tunePurple],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        case .emptyContainer:
+            return LinearGradient(
+                colors: [Color(red: 0.22, green: 0.48, blue: 0.68), Color(red: 0.34, green: 0.56, blue: 0.72)],
                 startPoint: .leading,
                 endPoint: .trailing
             )
@@ -823,9 +947,29 @@ private struct CalibrateKnownStandardSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Save this scan's acoustic echo signature as a known standard on your iPhone. Future scans—including blind tests in opaque mugs or bowls—will compare against your calibrated standards.")
+                    Text("Save this scan's real acoustic + optical signature as a known standard for your setup. Calibrating Empty Glass, Water Blank, and Salt Solution lets you run shuffled blind tests on the same glass.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("Container & Blank Controls (Phase 1)") {
+                    Button {
+                        onSelectTarget(CalibratedAcousticPrototype.emptyContainerTargetID)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Empty Glass / Container")
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text("Dry container control (no liquid fill)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "cup.and.saucer")
+                                .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                        }
+                    }
                 }
 
                 Section("Known Liquids") {

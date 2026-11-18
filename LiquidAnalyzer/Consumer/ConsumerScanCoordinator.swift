@@ -52,6 +52,8 @@ public final class ConsumerScanCoordinator: ObservableObject {
     @Published public var selectedTab: ConsumerTab = .scan
     @Published public var flowStep: ScanFlowStep = .home
     @Published public private(set) var scanProgress: Double = 0.0
+    @Published public private(set) var scanningStatusTitle: String = "Analyzing Liquid..."
+    @Published public private(set) var scanningStatusSubtitle: String = "Listening to sound-wave reflections"
     @Published public var consumerAlertMessage: String?
     @Published public private(set) var history: [ConsumerScanItem] = []
     @Published public private(set) var calibratedPrototypes: [CalibratedAcousticPrototype] = []
@@ -121,19 +123,55 @@ public final class ConsumerScanCoordinator: ObservableObject {
         consumerAlertMessage = nil
         triggerLightHaptic()
 
-        // Grab latest silent preview thumbnail + full wide-angle scene frame synchronously BEFORE transitioning away from AIM
+        // Grab latest silent preview thumbnail + full wide-angle scene frame + camera lock state BEFORE stopping AIM
         let thumbnailData = cameraService.latestTargetingThumbnail()
         let sceneContextData = cameraService.latestSceneContextJPEG()
+        let opticsLocked = cameraService.isOpticsLocked
         cameraService.stopCamera()
 
         scanProgress = 0.08
+        scanningStatusTitle = "Analyzing Liquid..."
+        scanningStatusSubtitle = "Listening to sound-wave reflections"
         flowStep = .scanning
 
         activeScanTask = Task { [weak self] in
             guard let self else { return }
             await self.runAutomatedConsumerScan(
                 thumbnailData: thumbnailData,
-                sceneContextData: sceneContextData
+                sceneContextData: sceneContextData,
+                opticsLocked: opticsLocked,
+                batchTotalCount: 1
+            )
+            self.activeScanTask = nil
+        }
+    }
+
+    /// Runs a hands-free N-scan untouched Repeatability Gate R1 sequence (default 20 scans)
+    /// using the locked camera frame and `.measurement` mode bottom microphone.
+    public func startRepeatabilityGateR1Batch(count: Int = 20) {
+        guard activeScanTask == nil else { return }
+        tunePlayer.stop()
+        consumerAlertMessage = nil
+        triggerLightHaptic()
+
+        let thumbnailData = cameraService.latestTargetingThumbnail()
+        let sceneContextData = cameraService.latestSceneContextJPEG()
+        let opticsLocked = cameraService.isOpticsLocked
+        cameraService.stopCamera()
+
+        let targetN = max(2, min(30, count))
+        scanProgress = 0.04
+        scanningStatusTitle = "Repeatability Gate R1 (1 / \(targetN))"
+        scanningStatusSubtitle = "Keep phone & glass completely untouched"
+        flowStep = .scanning
+
+        activeScanTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runAutomatedConsumerScan(
+                thumbnailData: thumbnailData,
+                sceneContextData: sceneContextData,
+                opticsLocked: opticsLocked,
+                batchTotalCount: targetN
             )
             self.activeScanTask = nil
         }
@@ -170,7 +208,62 @@ public final class ConsumerScanCoordinator: ObservableObject {
 
     public func clearHistory() {
         history = []
+        consumerScanCounter = 0
         historyStore.saveAll([])
+    }
+
+    /// Exports all recorded history items with full Repeatability Gate R1 telemetry to a shareable CSV file.
+    public func exportRepeatabilityCSVURL() -> URL? {
+        guard !history.isEmpty else { return nil }
+        let ordered = Array(history.reversed())
+        var lines: [String] = [
+            "scan_num,timestamp_iso,final_status,final_classification,primary_peak_hz,secondary_peaks_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_return_db,hf_scatter_db,container_centroid_hz,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores"
+        ]
+        let isoFmt = ISO8601DateFormatter()
+        for (idx, item) in ordered.enumerated() {
+            let seq = item.scanSequenceNumber ?? (idx + 1)
+            let iso = isoFmt.string(from: item.scannedAt)
+            let f = item.measuredFeatures
+            let secPeaks = f?.secondaryPeaksHz.map { String(format: "%.1f", $0) }.joined(separator: ";") ?? ""
+            let subBands = f?.subBandShapeDB.map { String(format: "%+.2f", $0) }.joined(separator: ";") ?? ""
+            let allScores = item.allCandidateDistances?.map { "\($0.profileID):\(String(format: "%.3f", $0.distance))" }.joined(separator: ";") ?? ""
+            let row = [
+                "\(seq)",
+                iso,
+                item.status.rawValue,
+                Self.csvEscape(item.title),
+                String(format: "%.2f", item.measuredPeakHz),
+                Self.csvEscape(secPeaks),
+                String(format: "%.2f", f?.activeRMSDBFS ?? 0.0),
+                String(format: "%.2f", f?.peakDBFS ?? 0.0),
+                String(format: "%.2f", f?.activeSNRDB ?? 0.0),
+                String(format: "%.2f", f?.echoReturnDB ?? 0.0),
+                String(format: "%.2f", f?.highFreqBubbleScatterDB ?? 0.0),
+                String(format: "%.2f", item.measuredCentroidHz),
+                String(format: "%.2f", item.measuredDecayDBPerSec),
+                String(format: "%.2f", f?.cavityMultipathDB ?? 0.0),
+                f?.featureVectorChecksum ?? "",
+                Self.csvEscape(subBands),
+                Self.csvEscape(item.topCandidateName ?? ""),
+                item.topCandidateDistance.map { String(format: "%.4f", $0) } ?? "",
+                Self.csvEscape(item.runnerUpTitle ?? ""),
+                item.secondCandidateDistance.map { String(format: "%.4f", $0) } ?? "",
+                item.winningMargin.map { String(format: "%.4f", $0) } ?? "",
+                Self.csvEscape(allScores)
+            ].joined(separator: ",")
+            lines.append(row)
+        }
+        let csvContent = lines.joined(separator: "\n") + "\n"
+        let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("repeatability_gate_r1.csv")
+        try? csvContent.data(using: .utf8)?.write(to: outURL, options: .atomic)
+        return outURL
+    }
+
+    private static func csvEscape(_ raw: String) -> String {
+        if raw.contains(",") || raw.contains("\"") || raw.contains("\n") {
+            return "\"" + raw.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+        return raw
     }
 
     public func clearCalibratedStandards() {
@@ -188,7 +281,29 @@ public final class ConsumerScanCoordinator: ObservableObject {
         triggerLightHaptic()
 
         let updatedItem: ConsumerScanItem
-        if targetID == CalibratedAcousticPrototype.solidSurfaceTargetID {
+        if targetID == CalibratedAcousticPrototype.emptyContainerTargetID {
+            updatedItem = ConsumerScanItem(
+                id: item.id,
+                scannedAt: item.scannedAt,
+                status: .emptyContainer,
+                title: "Empty Container",
+                formulaDisplay: "Calibrated Empty Glass Control",
+                statusBadgeText: "Calibrated Empty Glass Saved",
+                confidencePercent: 95,
+                scientificNote: "Saved as your calibrated empty-container standard for this setup so dry glass resonance is separated from liquid fills.",
+                constituents: [],
+                tuneProfile: item.tuneProfile,
+                measuredPeakHz: item.measuredPeakHz,
+                measuredCentroidHz: item.measuredCentroidHz,
+                measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+                measuredFeatures: features,
+                thumbnailJPEGData: item.thumbnailJPEGData
+            )
+            history.removeAll { $0.id == item.id }
+            history.insert(updatedItem, at: 0)
+            if history.count > 50 { history = Array(history.prefix(50)) }
+            historyStore.saveAll(history)
+        } else if targetID == CalibratedAcousticPrototype.solidSurfaceTargetID {
             updatedItem = ConsumerScanItem(
                 id: item.id,
                 scannedAt: item.scannedAt,
@@ -239,7 +354,9 @@ public final class ConsumerScanCoordinator: ObservableObject {
 
     private func runAutomatedConsumerScan(
         thumbnailData: Data?,
-        sceneContextData: Data?
+        sceneContextData: Data?,
+        opticsLocked: Bool,
+        batchTotalCount: Int
     ) async {
         let protocolConfig = researchCoordinator.protocolConfiguration
         let waveformRepo = researchCoordinator.waveformRepository
@@ -249,13 +366,11 @@ public final class ConsumerScanCoordinator: ObservableObject {
         let store = researchCoordinator.store
 
         do {
-            // 1. Verify storage & SHA-256 waveform integrity silently
             try await store.verifySufficientStorage()
             try waveformRepo.verifyAllAssets()
             if Task.isCancelled { return }
-            scanProgress = 0.22
+            scanProgress = batchTotalCount > 1 ? 0.06 : 0.22
 
-            // 2. Configure built-in speaker + microphone session (guarded against programmatic route notifications)
             isConfiguringSession = true
             let sessionInfo: (sampleRateHz: Double, outputVolume: Float)
             do {
@@ -273,93 +388,115 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 return
             }
 
-            // 3. Honor thermal/acoustic inter-scan cooldown automatically if user rescans right away
-            let remainingCooldownMs = timing.remainingCooldownMilliseconds
-            if remainingCooldownMs > 0 {
-                try await timing.sleepMilliseconds(min(remainingCooldownMs, 1_500))
-            }
-            if Task.isCancelled { return }
-            scanProgress = 0.38
-
-            // 4. Emit calibrated ESS sweep (`SIG_ESS_v1`) and record mono Float32 response
-            consumerScanCounter += 1
-            let sessionID = "CONSUMER_SESS"
-            let sampleID = String(format: "SCAN_%04d", consumerScanCounter + history.count)
-            let tempURL = try await store.temporaryRecordingURL(
-                sessionID: sessionID,
-                sampleID: sampleID,
-                repetition: 1
-            )
-
             let assetMeta = try waveformRepo.assetMetadata(assetID: "SIG_ESS_v1")
-            let waveformFile = try waveformRepo.audioFile(assetID: "SIG_ESS_v1")
             let inverseURL = try? waveformRepo.assetURL(assetID: "SIG_ESS_v1_inverse")
+            var lastResultItem: ConsumerScanItem?
 
-            let actualRate = try await audioEngine.prepare(
-                waveform: waveformFile,
-                destinationURL: tempURL,
-                expectedSampleRateHz: sessionInfo.sampleRateHz,
-                enforceExactSampleRate: false
-            )
-            try await audioEngine.start()
+            for batchIdx in 1...max(1, batchTotalCount) {
+                if Task.isCancelled { return }
+                if batchTotalCount > 1 {
+                    scanningStatusTitle = "Repeatability Gate R1 (\(batchIdx) / \(batchTotalCount))"
+                    scanningStatusSubtitle = "Do not move phone or glass between sweeps"
+                    scanProgress = Double(batchIdx - 1) / Double(batchTotalCount)
+                }
 
-            try await timing.sleepMilliseconds(protocolConfig.preRollMs)
-            if Task.isCancelled {
-                await audioEngine.abortImmediately()
-                return
-            }
-            scanProgress = 0.56
+                let remainingCooldownMs = timing.remainingCooldownMilliseconds
+                if remainingCooldownMs > 0 {
+                    try await timing.sleepMilliseconds(min(remainingCooldownMs, 2_050))
+                }
+                if Task.isCancelled { return }
+                if batchTotalCount == 1 { scanProgress = 0.38 }
 
-            let playTimes = await audioEngine.playExcitation(waveform: waveformFile)
-            scanProgress = 0.78
-
-            try await timing.sleepMilliseconds(protocolConfig.postRollMs)
-            _ = try await audioEngine.stopAndFinalizeRecording()
-
-            Task {
-                try? await timing.runCooldown(
-                    fromExcitationEndUptime: playTimes.endUptimeSeconds,
-                    cooldownMs: protocolConfig.cooldownMs
+                consumerScanCounter += 1
+                let currentSeq = consumerScanCounter
+                let sessionID = "CONSUMER_SESS"
+                let sampleID = String(format: "SCAN_%04d", currentSeq + history.count)
+                let tempURL = try await store.temporaryRecordingURL(
+                    sessionID: sessionID,
+                    sampleID: sampleID,
+                    repetition: 1
                 )
+
+                let waveformFile = try waveformRepo.audioFile(assetID: "SIG_ESS_v1")
+                let actualRate = try await audioEngine.prepare(
+                    waveform: waveformFile,
+                    destinationURL: tempURL,
+                    expectedSampleRateHz: sessionInfo.sampleRateHz,
+                    enforceExactSampleRate: false
+                )
+                try await audioEngine.start()
+
+                try await timing.sleepMilliseconds(protocolConfig.preRollMs)
+                if Task.isCancelled {
+                    await audioEngine.abortImmediately()
+                    return
+                }
+                if batchTotalCount == 1 { scanProgress = 0.56 }
+
+                let playTimes = await audioEngine.playExcitation(waveform: waveformFile)
+                if batchTotalCount == 1 { scanProgress = 0.78 }
+
+                try await timing.sleepMilliseconds(protocolConfig.postRollMs)
+                _ = try await audioEngine.stopAndFinalizeRecording()
+
+                Task {
+                    try? await timing.runCooldown(
+                        fromExcitationEndUptime: playTimes.endUptimeSeconds,
+                        cooldownMs: protocolConfig.cooldownMs
+                    )
+                }
+
+                let committed = try await store.commitRecordingFile(
+                    temporaryURL: tempURL,
+                    sessionID: sessionID,
+                    sampleID: sampleID,
+                    repetition: 1
+                )
+                if Task.isCancelled { return }
+                if batchTotalCount == 1 { scanProgress = 0.92 }
+
+                let preRollFrames = Int(round(Double(protocolConfig.preRollMs) * actualRate / 1_000.0))
+                let activeFrames = Int(round(Double(assetMeta.durationMs) * actualRate / 1_000.0))
+
+                let resultItem = try classifier.analyzeAndClassify(
+                    recordingURL: committed.finalURL,
+                    inverseFilterURL: (abs(actualRate - 48_000.0) < 100.0) ? inverseURL : nil,
+                    preRollFrames: preRollFrames,
+                    activeFrames: activeFrames,
+                    clippingCeilingDBFS: protocolConfig.clippingCeilingDBFS,
+                    scanSequenceNumber: currentSeq,
+                    thumbnailJPEGData: thumbnailData,
+                    sceneContextJPEGData: sceneContextData,
+                    opticsLocked: opticsLocked,
+                    calibratedPrototypes: calibratedPrototypes
+                )
+
+                // Record every scan in R1 batch (or any valid single scan) into History for full R1 variance audit
+                if batchTotalCount > 1 || (resultItem.status != .unclearScan && resultItem.status != .nonLiquidMaterial) {
+                    history.insert(resultItem, at: 0)
+                    if history.count > 60 {
+                        history = Array(history.prefix(60))
+                    }
+                    historyStore.saveAll(history)
+                }
+                lastResultItem = resultItem
+                scanProgress = Double(batchIdx) / Double(max(1, batchTotalCount))
             }
 
-            let committed = try await store.commitRecordingFile(
-                temporaryURL: tempURL,
-                sessionID: sessionID,
-                sampleID: sampleID,
-                repetition: 1
-            )
-            if Task.isCancelled { return }
-            scanProgress = 0.92
-
-            // 5. Deconvolve, verify signal quality, and run experimental reference classification
-            let preRollFrames = Int(round(Double(protocolConfig.preRollMs) * actualRate / 1_000.0))
-            let activeFrames = Int(round(Double(assetMeta.durationMs) * actualRate / 1_000.0))
-
-            let resultItem = try classifier.analyzeAndClassify(
-                recordingURL: committed.finalURL,
-                inverseFilterURL: (abs(actualRate - 48_000.0) < 100.0) ? inverseURL : nil,
-                preRollFrames: preRollFrames,
-                activeFrames: activeFrames,
-                clippingCeilingDBFS: protocolConfig.clippingCeilingDBFS,
-                thumbnailJPEGData: thumbnailData,
-                sceneContextJPEGData: sceneContextData,
-                calibratedPrototypes: calibratedPrototypes
-            )
-
-            try? await timing.sleepMilliseconds(160)
+            try? await timing.sleepMilliseconds(140)
             if Task.isCancelled { return }
             scanProgress = 1.0
 
-            if resultItem.status != .unclearScan && resultItem.status != .nonLiquidMaterial {
-                history.insert(resultItem, at: 0)
-                if history.count > 50 {
-                    history = Array(history.prefix(50))
+            if batchTotalCount > 1 {
+                selectedTab = .history
+                if let lastResultItem {
+                    flowStep = .result(lastResultItem)
+                } else {
+                    flowStep = .aim
                 }
-                historyStore.saveAll(history)
+            } else if let lastResultItem {
+                flowStep = .result(lastResultItem)
             }
-
-            flowStep = .result(resultItem)
         } catch {
             isConfiguringSession = false
             await audioEngine.abortImmediately()

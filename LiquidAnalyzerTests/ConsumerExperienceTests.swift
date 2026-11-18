@@ -254,6 +254,53 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertFalse(result.tuneProfile.baseFrequenciesHz.isEmpty)
     }
 
+    func testRepeatabilityGateR1HoldsBackAmbiguousMatchesAndLogsCompleteRawTelemetry() throws {
+        // Multi-mode container echo (1.62 kHz + 5.6 kHz + 7.8 kHz) whose distance (~1.2) sits in the weak/ambiguous zone
+        let ambiguousSamples = Self.makeMultiBandEcho(
+            f1: 1_620.0,
+            a2: 0.90,
+            f2: 5_600.0,
+            a3: 0.35,
+            f3: 7_800.0,
+            decay: 7.0
+        )
+        let cupJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (215, 215, 215),
+            rimRGB: (80, 84, 90),
+            innerRGB: (190, 194, 198)
+        )
+
+        let classifier = OnDeviceAcousticClassifier()
+        let r1 = classifier.classifySamples(
+            samples: ambiguousSamples,
+            inverseFilter: nil,
+            scanSequenceNumber: 7,
+            thumbnailJPEGData: cupJPEG
+        )
+        let r2 = classifier.classifySamples(
+            samples: ambiguousSamples,
+            inverseFilter: nil,
+            scanSequenceNumber: 8,
+            thumbnailJPEGData: cupJPEG
+        )
+
+        // Stringent Ambiguity Gate R1 must hold back weak/close matches as Unmatched rather than guessing random chemicals
+        XCTAssertEqual(r1.status, .unmatchedSignature)
+        XCTAssertEqual(r1.title, "Unmatched Liquid")
+        XCTAssertEqual(r1.scanSequenceNumber, 7)
+
+        // All raw Repeatability Gate R1 telemetry must be populated and repeatable
+        XCTAssertEqual(r1.measuredPeakHz, 1_620.0, accuracy: 18.0)
+        XCTAssertEqual(r1.measuredFeatures?.featureVectorChecksum, r2.measuredFeatures?.featureVectorChecksum)
+        XCTAssertFalse(r1.measuredFeatures?.secondaryPeaksHz.isEmpty ?? true)
+        XCTAssertNotNil(r1.topCandidateName)
+        XCTAssertNotNil(r1.topCandidateDistance)
+        XCTAssertNotNil(r1.runnerUpTitle)
+        XCTAssertNotNil(r1.secondCandidateDistance)
+        XCTAssertNotNil(r1.winningMargin)
+        XCTAssertEqual(r1.allCandidateDistances?.count, ReferenceLiquidProfile.provisionalLibrary.count)
+    }
+
     func testChemicalTuneSynthesizerGeneratesCleanBounded48kHzWAV() throws {
         let waterProfile = ReferenceLiquidProfile.provisionalLibrary[0]
         let item = ConsumerScanItem(

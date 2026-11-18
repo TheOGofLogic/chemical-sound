@@ -75,72 +75,98 @@ public struct ConsumerHistoryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(coordinator.history) { item in
-                            Button(action: {
-                                coordinator.openHistoryItem(item)
-                            }) {
-                                HStack(spacing: 14) {
-                                    ZStack {
-                                        Circle()
-                                            .fill(
-                                                (item.status == .referenceMatch
+                        if coordinator.history.count >= 2 {
+                            Section("Repeatability Gate R1 Summary (\(coordinator.history.count) Scans)") {
+                                RepeatabilityGateSummaryCard(
+                                    items: coordinator.history,
+                                    csvURL: coordinator.exportRepeatabilityCSVURL()
+                                )
+                            }
+                        }
+
+                        Section("Recorded Scans") {
+                            ForEach(coordinator.history) { item in
+                                Button(action: {
+                                    coordinator.openHistoryItem(item)
+                                }) {
+                                    HStack(spacing: 14) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(
+                                                    (item.status == .referenceMatch
+                                                        ? LiquidAnalyzerPalette.resultGreenStart
+                                                        : LiquidAnalyzerPalette.scanBlue
+                                                    ).opacity(0.14)
+                                                )
+                                                .frame(width: 46, height: 46)
+
+                                            Image(
+                                                systemName: item.status == .referenceMatch
+                                                    ? "checkmark.circle.fill"
+                                                    : "waveform"
+                                            )
+                                            .font(.system(size: 20, weight: .semibold))
+                                            .foregroundStyle(
+                                                item.status == .referenceMatch
                                                     ? LiquidAnalyzerPalette.resultGreenStart
                                                     : LiquidAnalyzerPalette.scanBlue
-                                                ).opacity(0.14)
                                             )
-                                            .frame(width: 46, height: 46)
+                                        }
 
-                                        Image(
-                                            systemName: item.status == .referenceMatch
-                                                ? "checkmark.circle.fill"
-                                                : "waveform"
-                                        )
-                                        .font(.system(size: 20, weight: .semibold))
-                                        .foregroundStyle(
-                                            item.status == .referenceMatch
-                                                ? LiquidAnalyzerPalette.resultGreenStart
-                                                : LiquidAnalyzerPalette.scanBlue
-                                        )
-                                    }
-
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(item.title)
-                                            .font(.headline)
-                                            .foregroundStyle(.primary)
-                                        Text("\(item.formulaDisplay) • \(item.scannedAt.formatted(date: .abbreviated, time: .shortened))")
-                                            .font(.caption)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            HStack(spacing: 6) {
+                                                if let seq = item.scanSequenceNumber {
+                                                    Text("#\(seq)")
+                                                        .font(.caption.weight(.bold).monospaced())
+                                                        .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                                                }
+                                                Text(item.title)
+                                                    .font(.headline)
+                                                    .foregroundStyle(.primary)
+                                            }
+                                            Text(
+                                                String(
+                                                    format: "%.1f Hz pk • %.0f Hz cent%@ • %@",
+                                                    item.measuredPeakHz,
+                                                    item.measuredCentroidHz,
+                                                    item.topCandidateName.map { " • #1 \($0)" } ?? "",
+                                                    item.scannedAt.formatted(date: .omitted, time: .standard)
+                                                )
+                                            )
+                                            .font(.caption2.monospaced())
                                             .foregroundStyle(.secondary)
-                                    }
+                                        }
 
-                                    Spacer()
+                                        Spacer()
 
-                                    Button(action: {
-                                        selectedTuneItem = item
-                                    }) {
-                                        Image(systemName: "music.note")
-                                            .font(.system(size: 15, weight: .bold))
-                                            .foregroundStyle(.white)
-                                            .frame(width: 34, height: 34)
-                                            .background(
-                                                Circle()
-                                                    .fill(
-                                                        LinearGradient(
-                                                            colors: [
-                                                                LiquidAnalyzerPalette.scanBlue,
-                                                                LiquidAnalyzerPalette.tunePurple
-                                                            ],
-                                                            startPoint: .topLeading,
-                                                            endPoint: .bottomTrailing
+                                        Button(action: {
+                                            selectedTuneItem = item
+                                        }) {
+                                            Image(systemName: "music.note")
+                                                .font(.system(size: 15, weight: .bold))
+                                                .foregroundStyle(.white)
+                                                .frame(width: 34, height: 34)
+                                                .background(
+                                                    Circle()
+                                                        .fill(
+                                                            LinearGradient(
+                                                                colors: [
+                                                                    LiquidAnalyzerPalette.scanBlue,
+                                                                    LiquidAnalyzerPalette.tunePurple
+                                                                ],
+                                                                startPoint: .topLeading,
+                                                                endPoint: .bottomTrailing
+                                                            )
                                                         )
-                                                    )
-                                            )
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("Play Chemical Tune for \(item.title)")
                                     }
-                                    .buttonStyle(.plain)
-                                    .accessibilityLabel("Play Chemical Tune for \(item.title)")
+                                    .padding(.vertical, 4)
                                 }
-                                .padding(.vertical, 4)
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -163,6 +189,87 @@ public struct ConsumerHistoryView: View {
                 )
             }
         }
+    }
+}
+
+private struct RepeatabilityGateSummaryCard: View {
+    let items: [ConsumerScanItem]
+    let csvURL: URL?
+
+    var body: some View {
+        let peaks = items.map(\.measuredPeakHz)
+        let centroids = items.map(\.measuredCentroidHz)
+        let amps = items.compactMap { $0.measuredFeatures?.activeRMSDBFS }
+        let echos = items.compactMap { $0.measuredFeatures?.echoReturnDB }
+
+        let (pkMean, pkSD, pkMin, pkMax) = Self.stats(peaks)
+        let (ctMean, ctSD, _, _) = Self.stats(centroids)
+        let (ampMean, ampSD, _, _) = Self.stats(amps)
+        let (ecMean, ecSD, _, _) = Self.stats(echos)
+
+        var topCounts: [String: Int] = [:]
+        for name in items.compactMap(\.topCandidateName) {
+            topCounts[name, default: 0] += 1
+        }
+        let dominantTop = topCounts.max { $0.value < $1.value }
+
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("Primary Peak Hz")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(String(format: "%.1f ± %.1f Hz (%.0f–%.0f)", pkMean, pkSD, pkMin, pkMax))
+                    .fontWeight(.semibold)
+            }
+            HStack {
+                Text("Centroid Hz")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(String(format: "%.1f ± %.1f Hz", ctMean, ctSD))
+                    .fontWeight(.semibold)
+            }
+            if !amps.isEmpty {
+                HStack {
+                    Text("Active Amp / Echo")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(String(format: "%.1f±%.1f dBFS • %.1f±%.1f dB", ampMean, ampSD, ecMean, ecSD))
+                        .fontWeight(.medium)
+                }
+            }
+            if let dom = dominantTop {
+                HStack {
+                    Text("Top Raw Candidate")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(dom.key) (\(dom.value)/\(items.count) scans)")
+                        .fontWeight(.semibold)
+                }
+            }
+            if let csvURL {
+                ShareLink(item: csvURL) {
+                    Label("Export Repeatability Gate R1 CSV", systemImage: "square.and.arrow.up")
+                        .font(.caption.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
+                        )
+                }
+                .padding(.top, 4)
+            }
+        }
+        .font(.caption.monospaced())
+        .padding(.vertical, 4)
+    }
+
+    private static func stats(_ values: [Double]) -> (mean: Double, sd: Double, min: Double, max: Double) {
+        guard !values.isEmpty else { return (0, 0, 0, 0) }
+        let n = Double(values.count)
+        let mean = values.reduce(0.0, +) / n
+        let variance = values.reduce(0.0) { $0 + ($1 - mean) * ($1 - mean) } / max(1.0, n - 1.0)
+        return (mean, sqrt(max(0.0, variance)), values.min() ?? mean, values.max() ?? mean)
     }
 }
 
@@ -300,7 +407,7 @@ public struct ConsumerMoreView: View {
 
                 Section("About") {
                     LabeledContent("Application", value: "Liquid Analyzer")
-                    LabeledContent("Version", value: "0.3.3 (Build 8)")
+                    LabeledContent("Version", value: "0.3.4 (Build 9)")
                 }
             }
             .navigationTitle("More")

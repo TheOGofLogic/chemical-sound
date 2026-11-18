@@ -122,7 +122,9 @@ public actor AudioSessionController {
         #endif
     }
 
-    /// Resilient consumer-mode audio configuration using built-in speaker + mic at native sample rate.
+    /// Deterministic measurement-mode audio configuration using built-in bottom speaker + omnidirectional mic.
+    /// Uses `.measurement` mode to disable iOS adaptive AGC, voice echo cancellation, and multi-mic beamforming
+    /// so repeated scans of the same container produce repeatable physical waveforms.
     public func configureForConsumerScan() async throws -> (sampleRateHz: Double, outputVolume: Float) {
         let granted = await requestMicrophonePermission()
         guard granted else {
@@ -134,15 +136,15 @@ public actor AudioSessionController {
 
         do {
             do {
-                try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+                try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
             } catch {
-                try session.setCategory(.playAndRecord, mode: .default, options: [])
+                try session.setCategory(.playAndRecord, mode: .measurement, options: [])
             }
             try? session.setPreferredSampleRate(48_000.0)
             try? session.setPreferredIOBufferDuration(0.010)
             try session.setActive(true)
         } catch {
-            throw AcquisitionFailure.audioEngineFailure("Unable to activate audio session: \(error)")
+            throw AcquisitionFailure.audioEngineFailure("Unable to activate measurement audio session: \(error)")
         }
 
         // Reject external headphones/Bluetooth so speaker-to-mic acoustic sweep uses built-in transducers
@@ -159,10 +161,17 @@ public actor AudioSessionController {
         try? session.overrideOutputAudioPort(.speaker)
         if let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
             try? session.setPreferredInput(builtInMic)
+            if let dataSources = builtInMic.dataSources,
+               let bottomOmni = preferredDataSource(from: dataSources) {
+                if bottomOmni.supportedPolarPatterns?.contains(.omnidirectional) == true {
+                    try? bottomOmni.setPreferredPolarPattern(.omnidirectional)
+                }
+                try? builtInMic.setPreferredDataSource(bottomOmni)
+            }
         }
 
-        // Allow CoreAudio route & sample-rate negotiation to settle before creating AVAudioEngine
-        try? await Task.sleep(for: .milliseconds(60))
+        // Allow CoreAudio measurement route & fixed hardware gain to settle before starting AVAudioEngine
+        try? await Task.sleep(for: .milliseconds(100))
 
         let rate = session.sampleRate > 0 ? session.sampleRate : 48_000.0
         return (rate, session.outputVolume)

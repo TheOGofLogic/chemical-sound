@@ -16,21 +16,37 @@ public enum ScanFlowStep: Equatable, Sendable {
     case result(ConsumerScanItem)
 }
 
-/// Four-state scientific outcome mapped cleanly for consumer display.
+/// Five-state scientific outcome mapped cleanly for consumer & geometry-controlled blind-test display.
 public enum ConsumerMatchStatus: String, Codable, Equatable, Sendable {
     case referenceMatch = "REFERENCE_MATCH"
     case unmatchedSignature = "NO_VALIDATED_MATCH"
+    case emptyContainer = "EMPTY_CONTAINER"
     case nonLiquidMaterial = "NON_LIQUID_SURFACE"
     case unclearScan = "INVALID_MEASUREMENT"
 }
 
-/// Extracted multi-dimensional acoustic scattering & resonance features from a 48 kHz ESS scan.
-/// Captures both macro resonance modes and a 6-band mean-centered scattering profile (radar-style echo signature).
+/// Raw distance score against a single frozen reference profile for Repeatability Gate R1 auditing.
+public struct CandidateScoreEntry: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { profileID }
+    public let profileID: String
+    public let displayName: String
+    public let distance: Double
+
+    public init(profileID: String, displayName: String, distance: Double) {
+        self.profileID = profileID
+        self.displayName = displayName
+        self.distance = distance
+    }
+}
+
+/// Extracted multi-dimensional acoustic scattering & optical refraction features from a 48 kHz ESS scan.
 public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
     public let activeSNRDB: Double
+    public let activeRMSDBFS: Double
     public let peakDBFS: Double
     public let clippedSamples: Int
     public let dominantPeakHz: Double
+    public let secondaryPeaksHz: [Double]
     public let spectralCentroidHz: Double
     public let midToHighBandDB: Double
     public let decaySlopeDBPerSec: Double
@@ -39,12 +55,20 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
     public let peakProminenceDB: Double
     public let cavityMultipathDB: Double
     public let subBandShapeDB: [Double]
+    public let echoReturnDB: Double
+    public let featureVectorChecksum: String
+    public let opticalCenterBrightness: Double
+    public let opticalInteriorContrast: Double
+    public let opticalRimContrast: Double
+    public let opticsLocked: Bool
 
     public init(
         activeSNRDB: Double,
+        activeRMSDBFS: Double = -24.0,
         peakDBFS: Double,
         clippedSamples: Int,
         dominantPeakHz: Double,
+        secondaryPeaksHz: [Double] = [],
         spectralCentroidHz: Double,
         midToHighBandDB: Double,
         decaySlopeDBPerSec: Double,
@@ -52,12 +76,20 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         spectralFlatness: Double = 0.25,
         peakProminenceDB: Double = 12.0,
         cavityMultipathDB: Double = -3.0,
-        subBandShapeDB: [Double] = [0, 0, 0, 0, 0, 0]
+        subBandShapeDB: [Double] = [0, 0, 0, 0, 0, 0],
+        echoReturnDB: Double = -14.0,
+        featureVectorChecksum: String = "00000000",
+        opticalCenterBrightness: Double = 0.50,
+        opticalInteriorContrast: Double = 0.02,
+        opticalRimContrast: Double = 0.04,
+        opticsLocked: Bool = false
     ) {
         self.activeSNRDB = activeSNRDB
+        self.activeRMSDBFS = activeRMSDBFS
         self.peakDBFS = peakDBFS
         self.clippedSamples = clippedSamples
         self.dominantPeakHz = dominantPeakHz
+        self.secondaryPeaksHz = secondaryPeaksHz
         self.spectralCentroidHz = spectralCentroidHz
         self.midToHighBandDB = midToHighBandDB
         self.decaySlopeDBPerSec = decaySlopeDBPerSec
@@ -66,12 +98,19 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         self.peakProminenceDB = peakProminenceDB
         self.cavityMultipathDB = cavityMultipathDB
         self.subBandShapeDB = subBandShapeDB
+        self.echoReturnDB = echoReturnDB
+        self.featureVectorChecksum = featureVectorChecksum
+        self.opticalCenterBrightness = opticalCenterBrightness
+        self.opticalInteriorContrast = opticalInteriorContrast
+        self.opticalRimContrast = opticalRimContrast
+        self.opticsLocked = opticsLocked
     }
 }
 
-/// Empirical known-standard prototype saved on-device for calibrated indirect acoustic inference.
+/// Empirical known-standard prototype saved on-device for calibrated indirect acoustic/optical inference.
 public struct CalibratedAcousticPrototype: Codable, Equatable, Identifiable, Sendable {
     public static let solidSurfaceTargetID = "SOLID_SURFACE"
+    public static let emptyContainerTargetID = "EMPTY_CONTAINER"
 
     public let id: UUID
     public let createdAt: Date
@@ -565,6 +604,7 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
 public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let scannedAt: Date
+    public let scanSequenceNumber: Int?
     public let status: ConsumerMatchStatus
     public let title: String
     public let formulaDisplay: String
@@ -577,11 +617,19 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
     public let measuredCentroidHz: Double
     public let measuredDecayDBPerSec: Double
     public let measuredFeatures: ExtractedConsumerFeatures?
+    public let topCandidateName: String?
+    public let topCandidateDistance: Double?
+    public let runnerUpTitle: String?
+    public let runnerUpSimilarityPercent: Int?
+    public let secondCandidateDistance: Double?
+    public let winningMargin: Double?
+    public let allCandidateDistances: [CandidateScoreEntry]?
     public let thumbnailJPEGData: Data?
 
     public init(
         id: UUID = UUID(),
         scannedAt: Date = Date(),
+        scanSequenceNumber: Int? = nil,
         status: ConsumerMatchStatus,
         title: String,
         formulaDisplay: String,
@@ -594,10 +642,18 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         measuredCentroidHz: Double,
         measuredDecayDBPerSec: Double,
         measuredFeatures: ExtractedConsumerFeatures? = nil,
+        topCandidateName: String? = nil,
+        topCandidateDistance: Double? = nil,
+        runnerUpTitle: String? = nil,
+        runnerUpSimilarityPercent: Int? = nil,
+        secondCandidateDistance: Double? = nil,
+        winningMargin: Double? = nil,
+        allCandidateDistances: [CandidateScoreEntry]? = nil,
         thumbnailJPEGData: Data? = nil
     ) {
         self.id = id
         self.scannedAt = scannedAt
+        self.scanSequenceNumber = scanSequenceNumber
         self.status = status
         self.title = title
         self.formulaDisplay = formulaDisplay
@@ -610,6 +666,13 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         self.measuredCentroidHz = measuredCentroidHz
         self.measuredDecayDBPerSec = measuredDecayDBPerSec
         self.measuredFeatures = measuredFeatures
+        self.topCandidateName = topCandidateName
+        self.topCandidateDistance = topCandidateDistance
+        self.runnerUpTitle = runnerUpTitle
+        self.runnerUpSimilarityPercent = runnerUpSimilarityPercent
+        self.secondCandidateDistance = secondCandidateDistance
+        self.winningMargin = winningMargin
+        self.allCandidateDistances = allCandidateDistances
         self.thumbnailJPEGData = thumbnailJPEGData
     }
 }
