@@ -520,6 +520,105 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: wavURL.path))
     }
 
+    func testSpeakerPortHelmholtzBleedAt3820HzDoesNotSwitch15InchPrimaryPeak() throws {
+        let (ess, inv) = try Self.loadBundledESSAndInverse()
+        let classifier = OnDeviceAcousticClassifier()
+        let cupJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (215, 215, 215),
+            rimRGB: (80, 84, 90),
+            innerRGB: (190, 194, 198)
+        )
+
+        var prngState: UInt64 = 0x1357_9BDF_2468_ACE0
+        for idx in 1...12 {
+            let rec = Self.makeDeconvolvedChannelRecording(
+                ess: ess,
+                distanceInches: 15.0,
+                modes: [(2_460.0, 0.00042, 0.0034)],
+                noiseRMS: 0.0028,
+                onsetJitterSamples: (idx - 6) * 140,
+                injectStartupTransient: true,
+                injectSpeakerPortBleed3820Hz: true,
+                prng: &prngState
+            )
+            let item = classifier.classifySamples(
+                samples: rec,
+                inverseFilter: inv,
+                scanSequenceNumber: idx,
+                thumbnailJPEGData: cupJPEG
+            )
+            XCTAssertNotEqual(item.status, .unclearScan)
+            // Must reject the 3820 Hz internal speaker-port/case Helmholtz ring-down and stay locked on 2460 Hz
+            XCTAssertEqual(item.measuredPeakHz, 2_460.0, accuracy: 28.0)
+        }
+    }
+
+    @MainActor
+    func testUnlockedR1CSVExportWritesToDocumentsAndMatchesText() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LA_CSV_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let histStore = ConsumerHistoryStore(fileURL: tempDir.appendingPathComponent("history.json"))
+        let protoStore = CalibratedPrototypeStore(fileURL: tempDir.appendingPathComponent("protos.json"))
+        let prof = ReferenceLiquidProfile.provisionalLibrary[0]
+        let sampleItem = ConsumerScanItem(
+            status: .unmatchedSignature,
+            title: "Unmatched Liquid",
+            formulaDisplay: "Acoustic Profile",
+            statusBadgeText: "Ambiguity Gate R1 • No Forced Match",
+            confidencePercent: nil,
+            scientificNote: "Held back.",
+            constituents: [],
+            tuneProfile: prof.tuneProfile,
+            measuredPeakHz: 2_314.5,
+            measuredCentroidHz: 3_390.2,
+            measuredDecayDBPerSec: 84.0,
+            scanSequenceNumber: 1,
+            batchRunID: "R1_20X_20261118_160000",
+            batchScanIndex: 1,
+            batchTotalCount: 20,
+            geometryCondition: GeometryTestCondition.stationary15InBaseline.rawValue,
+            controlSeriesTag: ControlSeriesTag.water.rawValue,
+            aeAfWbLockState: "LOCKED",
+            targetLockState: "R1_STATIONARY_LOCKED",
+            targetLockScore: 1.0,
+            gateDecision: "HELD_AMBIGUITY_GATE",
+            rejectionReason: "AMBIGUITY_MARGIN(m=0.07<0.11)"
+        )
+        histStore.saveAll([sampleItem])
+
+        let logger = AuditLogger(logFileURL: tempDir.appendingPathComponent("audit.jsonl"))
+        let machine = AcquisitionStateMachine(auditLogger: logger)
+        let acq = AcquisitionCoordinator(stateMachine: machine, auditLogger: logger)
+        let coord = ConsumerScanCoordinator(
+            researchCoordinator: acq,
+            historyStore: histStore,
+            prototypeStore: protoStore
+        )
+
+        let sanitized = ConsumerScanCoordinator.sanitizedCSVFilename(suffix: "BATCH_R1_20X_20261118 (15-in)")
+        XCTAssertEqual(sanitized, "LiquidAnalyzer_R1_BATCH_R1_20X_20261118_15-in.csv")
+
+        let csvText = coord.exportRepeatabilityCSVText(items: [sampleItem])
+        XCTAssertTrue(csvText.contains("scan_num,batch_run_id,batch_index"))
+        XCTAssertTrue(csvText.contains("STATIONARY_15IN_BASELINE"))
+        XCTAssertTrue(csvText.contains("2314.50"))
+
+        let exportedURL = try XCTUnwrap(
+            coord.exportRepeatabilityCSVURL(items: [sampleItem], filenameSuffix: "BATCH_R1_20X_TEST")
+        )
+        defer { try? FileManager.default.removeItem(at: exportedURL) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportedURL.path))
+        XCTAssertTrue(exportedURL.path.contains("R1_Exports"))
+        let diskText = try String(contentsOf: exportedURL, encoding: .utf8)
+        XCTAssertEqual(diskText, csvText)
+
+        let copiedRows = coord.copyRepeatabilityCSVToClipboard(items: [sampleItem])
+        XCTAssertEqual(copiedRows, 1)
+    }
+
     // MARK: - Helpers
 
     private static func loadBundledESSAndInverse() throws -> (ess: [Float], inv: [Float]) {
@@ -557,12 +656,19 @@ final class ConsumerExperienceTests: XCTestCase {
         noiseRMS: Double,
         onsetJitterSamples: Int,
         injectStartupTransient: Bool,
+        injectSpeakerPortBleed3820Hz: Bool = false,
         prng: inout UInt64
     ) -> [Float] {
         let sr = 48_000.0
         var h = [Double](repeating: 0.0, count: 1_024)
         h[4] = 0.105
         h[5] = -0.042
+        if injectSpeakerPortBleed3820Hz {
+            for k in 1..<180 {
+                let dt = Double(k) / sr
+                h[4 + k] += 0.025 * exp(-dt / 0.00115) * sin(2.0 * Double.pi * 3_820.0 * dt)
+            }
+        }
         let tof = Int(round((2.0 * (distanceInches * 0.0254) / 343.0) * sr)) + 4
         for k in 0..<420 where (tof + k) < h.count {
             let dt = Double(k) / sr

@@ -836,12 +836,13 @@ public struct OnDeviceAcousticClassifier: Sendable {
             actDB = ImmediateAudioAnalyzer.linearToDBFS(actRMS)
             snrDB = max(0.0, actDB - preDB)
 
-            // 3. Causal container reflection gate [t0 + 1.25 ms .. t0 + 15.0 ms]
-            // Captures close-up & 15-in (2.22 ms) arrival at unity weight while cutting >2.5 m room walls
+            // 3. Causal container reflection gate [t0 + 2.15 ms .. t0 + 15.5 ms]
+            // Rejects internal speaker-port/case Helmholtz ring-down (0..2.1 ms, ~3.7-3.9 kHz) while capturing
+            // both close-range sustained modes and 15-in (2.22 ms) external arrivals before >2.6 m room walls.
             let dirStart = max(0, peakIdx - Int(0.0004 * sampleRateHz))
             let dirEnd = min(ir.count, peakIdx + Int(0.0011 * sampleRateHz))
-            let tailStart = min(ir.count, peakIdx + Int(0.00125 * sampleRateHz))
-            let tailEnd = min(ir.count, peakIdx + Int(0.0150 * sampleRateHz))
+            let tailStart = min(ir.count, peakIdx + Int(0.00215 * sampleRateHz))
+            let tailEnd = min(ir.count, peakIdx + Int(0.0155 * sampleRateHz))
 
             // Measure physical echo arrival delay after direct path t0
             let arrivalLo = min(ir.count, peakIdx + Int(0.00065 * sampleRateHz))
@@ -921,7 +922,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
             let copyCount = min(analysisSignal.count, nFFT)
             var real1 = [Double](repeating: 0.0, count: nFFT)
             var imag1 = [Double](repeating: 0.0, count: nFFT)
-            let leadIn = min(Int(0.00045 * sampleRateHz), max(1, copyCount / 6))
+            let leadIn = min(Int(0.00065 * sampleRateHz), max(1, copyCount / 5))
             let flatEnd = min(copyCount, Int(0.00725 * sampleRateHz))
             var wNorm1 = 0.0
             var wSum1 = 0.0

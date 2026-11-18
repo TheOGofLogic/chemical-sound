@@ -1,4 +1,28 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+/// Unlocked in-memory UTF-8 CSV document for native `fileExporter` ("Save to Files / Downloads") without sandbox tmp locks.
+public struct CSVTextDocument: FileDocument {
+    public static var readableContentTypes: [UTType] { [.commaSeparatedText, .plainText] }
+    public var text: String
+
+    public init(text: String = "") {
+        self.text = text
+    }
+
+    public init(configuration: ReadConfiguration) throws {
+        if let data = configuration.file.regularFileContents,
+           let decoded = String(data: data, encoding: .utf8) {
+            self.text = decoded
+        } else {
+            self.text = ""
+        }
+    }
+
+    public func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
+    }
+}
 
 /// Primary consumer navigation shell (`Scan | History | Learn | More`).
 public struct ConsumerRootView: View {
@@ -58,6 +82,10 @@ public struct ConsumerHistoryView: View {
     @ObservedObject var coordinator: ConsumerScanCoordinator
     @State private var selectedTuneItem: ConsumerScanItem?
     @State private var selectedCohortID: String = ""
+    @State private var exporterPresented: Bool = false
+    @State private var exporterDocument: CSVTextDocument = CSVTextDocument()
+    @State private var exporterFilename: String = "LiquidAnalyzer_R1_cohort.csv"
+    @State private var copyStatusBanner: String?
 
     public init(coordinator: ConsumerScanCoordinator) {
         self.coordinator = coordinator
@@ -156,14 +184,30 @@ public struct ConsumerHistoryView: View {
 
                                 RepeatabilityGateSummaryCard(
                                     items: cohort.items,
-                                    cohortCSVURL: coordinator.exportRepeatabilityCSVURL(
-                                        items: cohort.items,
-                                        filenameSuffix: cohort.id
-                                    ),
-                                    allHistoryCSVURL: coordinator.exportRepeatabilityCSVURL(
-                                        items: nil,
-                                        filenameSuffix: "full_history"
-                                    )
+                                    copyStatusBanner: copyStatusBanner,
+                                    onSaveCohortToFiles: {
+                                        _ = coordinator.exportRepeatabilityCSVURL(items: cohort.items, filenameSuffix: cohort.id)
+                                        exporterDocument = CSVTextDocument(
+                                            text: coordinator.exportRepeatabilityCSVText(items: cohort.items)
+                                        )
+                                        exporterFilename = ConsumerScanCoordinator.sanitizedCSVFilename(suffix: cohort.id)
+                                        exporterPresented = true
+                                    },
+                                    onCopyCohortCSV: {
+                                        let count = coordinator.copyRepeatabilityCSVToClipboard(items: cohort.items)
+                                        copyStatusBanner = "Copied \(count) scans to clipboard — paste anywhere ✓"
+                                    },
+                                    onShareCohortCSV: {
+                                        coordinator.presentNativeCSVShareSheet(items: cohort.items, filenameSuffix: cohort.id)
+                                    },
+                                    onSaveFullHistoryToFiles: coordinator.history.count > cohort.items.count ? {
+                                        _ = coordinator.exportRepeatabilityCSVURL(items: nil, filenameSuffix: "full_history")
+                                        exporterDocument = CSVTextDocument(
+                                            text: coordinator.exportRepeatabilityCSVText(items: nil)
+                                        )
+                                        exporterFilename = ConsumerScanCoordinator.sanitizedCSVFilename(suffix: "full_history")
+                                        exporterPresented = true
+                                    } : nil
                                 )
                             }
 
@@ -174,11 +218,42 @@ public struct ConsumerHistoryView: View {
                                     )
                                 }
                             }
-                        } else if let csvURL = coordinator.exportRepeatabilityCSVURL() {
-                            Section("Export") {
-                                ShareLink(item: csvURL) {
-                                    Label("Export Repeatability Gate R1 CSV", systemImage: "square.and.arrow.up")
+                        } else if !coordinator.history.isEmpty {
+                            Section("Export Repeatability Gate R1 CSV") {
+                                Button {
+                                    _ = coordinator.exportRepeatabilityCSVURL(items: nil, filenameSuffix: "single_scan")
+                                    exporterDocument = CSVTextDocument(
+                                        text: coordinator.exportRepeatabilityCSVText(items: nil)
+                                    )
+                                    exporterFilename = ConsumerScanCoordinator.sanitizedCSVFilename(suffix: "single_scan")
+                                    exporterPresented = true
+                                } label: {
+                                    Label("Download / Save R1 CSV to Files", systemImage: "arrow.down.doc.fill")
                                         .font(.caption.weight(.bold))
+                                }
+                                .buttonStyle(.borderless)
+
+                                Button {
+                                    let count = coordinator.copyRepeatabilityCSVToClipboard(items: nil)
+                                    copyStatusBanner = "Copied \(count) scan(s) to clipboard — paste anywhere ✓"
+                                } label: {
+                                    Label("Copy R1 CSV to Clipboard", systemImage: "doc.on.doc.fill")
+                                        .font(.caption.weight(.bold))
+                                }
+                                .buttonStyle(.borderless)
+
+                                Button {
+                                    coordinator.presentNativeCSVShareSheet(items: nil, filenameSuffix: "single_scan")
+                                } label: {
+                                    Label("Share R1 CSV...", systemImage: "square.and.arrow.up")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .buttonStyle(.borderless)
+
+                                if let copyStatusBanner {
+                                    Text(copyStatusBanner)
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(LiquidAnalyzerPalette.resultGreenStart)
                                 }
                             }
                         }
@@ -287,6 +362,19 @@ public struct ConsumerHistoryView: View {
                     onBack: { selectedTuneItem = nil }
                 )
             }
+            .fileExporter(
+                isPresented: $exporterPresented,
+                document: exporterDocument,
+                contentType: .commaSeparatedText,
+                defaultFilename: exporterFilename
+            ) { result in
+                switch result {
+                case .success(let savedURL):
+                    copyStatusBanner = "Saved \(savedURL.lastPathComponent) ✓"
+                case .failure(let error):
+                    copyStatusBanner = "Use Copy CSV or Files -> Liquid Analyzer -> R1_Exports (\(error.localizedDescription))"
+                }
+            }
         }
     }
 
@@ -319,8 +407,11 @@ public struct ConsumerHistoryView: View {
 
 private struct RepeatabilityGateSummaryCard: View {
     let items: [ConsumerScanItem]
-    let cohortCSVURL: URL?
-    let allHistoryCSVURL: URL?
+    let copyStatusBanner: String?
+    let onSaveCohortToFiles: () -> Void
+    let onCopyCohortCSV: () -> Void
+    let onShareCohortCSV: () -> Void
+    let onSaveFullHistoryToFiles: (() -> Void)?
 
     var body: some View {
         let validItems = items.filter { $0.status != .unclearScan && $0.status != .nonLiquidMaterial }
@@ -385,27 +476,73 @@ private struct RepeatabilityGateSummaryCard: View {
                         .fontWeight(.semibold)
                 }
             }
-            if let cohortCSVURL {
-                ShareLink(item: cohortCSVURL) {
-                    Label("Export Cohort R1 CSV", systemImage: "square.and.arrow.up")
+            VStack(spacing: 6) {
+                Button(action: onSaveCohortToFiles) {
+                    Label("Download / Save Cohort R1 CSV", systemImage: "arrow.down.doc.fill")
                         .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                        .padding(.vertical, 9)
                         .background(
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
+                                .fill(LiquidAnalyzerPalette.scanBlue)
                         )
                 }
-                .padding(.top, 4)
-            }
-            if let allHistoryCSVURL, allHistoryCSVURL != cohortCSVURL {
-                ShareLink(item: allHistoryCSVURL) {
-                    Label("Export Full History CSV", systemImage: "doc.text")
-                        .font(.caption2.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 5)
+                .buttonStyle(.borderless)
+
+                HStack(spacing: 8) {
+                    Button(action: onCopyCohortCSV) {
+                        Label("Copy Cohort CSV", systemImage: "doc.on.doc.fill")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
+                            )
+                    }
+                    .buttonStyle(.borderless)
+
+                    Button(action: onShareCohortCSV) {
+                        Label("Share CSV...", systemImage: "square.and.arrow.up")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
+                            )
+                    }
+                    .buttonStyle(.borderless)
                 }
+
+                if let onSaveFullHistoryToFiles {
+                    Button(action: onSaveFullHistoryToFiles) {
+                        Label("Save Full History CSV", systemImage: "folder.badge.plus")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                    }
+                    .buttonStyle(.borderless)
+                }
+
+                if let copyStatusBanner {
+                    Text(copyStatusBanner)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(LiquidAnalyzerPalette.resultGreenStart)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                Text("Unlocked CSVs are also auto-saved in Files → On My Device → Liquid Analyzer → R1_Exports")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
+            .padding(.top, 4)
         }
         .font(.caption.monospaced())
         .padding(.vertical, 4)
@@ -629,7 +766,7 @@ public struct ConsumerMoreView: View {
 
                 Section("About") {
                     LabeledContent("Application", value: "Liquid Analyzer")
-                    LabeledContent("Version", value: "0.3.5 (Build 10)")
+                    LabeledContent("Version", value: "0.3.6 (Build 11)")
                 }
             }
             .navigationTitle("More")

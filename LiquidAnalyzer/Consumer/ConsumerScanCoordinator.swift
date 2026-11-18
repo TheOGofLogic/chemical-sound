@@ -229,10 +229,10 @@ public final class ConsumerScanCoordinator: ObservableObject {
         historyStore.saveAll([])
     }
 
-    /// Exports recorded items (either a single geometry/batch cohort or full history) with complete Repeatability Gate R1 telemetry.
-    public func exportRepeatabilityCSVURL(items subset: [ConsumerScanItem]? = nil, filenameSuffix: String = "all") -> URL? {
+    /// Generates the complete UTF-8 Repeatability Gate R1 CSV string for a cohort or full history.
+    public func exportRepeatabilityCSVText(items subset: [ConsumerScanItem]? = nil) -> String {
         let source = subset ?? history
-        guard !source.isEmpty else { return nil }
+        guard !source.isEmpty else { return "" }
         let ordered = Array(source.reversed())
         var lines: [String] = [
             "scan_num,batch_run_id,batch_index,batch_total,timestamp_iso,geometry_condition,control_series_tag,ae_af_wb_lock_state,target_lock_state,target_lock_score,final_status,gate_decision,rejection_reason,final_classification,primary_peak_hz,primary_peak_db,secondary_peaks_hz,secondary_peaks_db,intra_scan_persistence,container_centroid_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_rms_dbfs,echo_return_db,tail_snr_db,alignment_offset_samples,echo_arrival_delay_ms,hf_scatter_db,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores"
@@ -289,11 +289,106 @@ public final class ConsumerScanCoordinator: ObservableObject {
             ].joined(separator: ",")
             lines.append(row)
         }
-        let csvContent = lines.joined(separator: "\n") + "\n"
-        let safeSuffix = filenameSuffix.replacingOccurrences(of: " ", with: "_")
-        let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("repeatability_gate_r1_\(safeSuffix).csv")
-        try? csvContent.data(using: .utf8)?.write(to: outURL, options: .atomic)
-        return outURL
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    public static func sanitizedCSVFilename(suffix: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-"))
+        let cleaned = suffix.unicodeScalars
+            .map { allowed.contains($0) ? Character($0) : Character("_") }
+        var compact = String(cleaned)
+        while compact.contains("__") {
+            compact = compact.replacingOccurrences(of: "__", with: "_")
+        }
+        compact = compact.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        let trimmed = compact.isEmpty ? "cohort" : String(compact.prefix(48))
+        return "LiquidAnalyzer_R1_\(trimmed).csv"
+    }
+
+    /// Writes unlocked Repeatability Gate R1 CSV into `Documents/R1_Exports/` (`NSFileProtectionNone`),
+    /// making it immediately accessible without file-protection locks in Files (`On My Device -> Liquid Analyzer -> R1_Exports`) and Share Sheet.
+    @discardableResult
+    public func exportRepeatabilityCSVURL(items subset: [ConsumerScanItem]? = nil, filenameSuffix: String = "all") -> URL? {
+        let csvContent = exportRepeatabilityCSVText(items: subset)
+        guard !csvContent.isEmpty, let utf8Data = csvContent.data(using: .utf8) else { return nil }
+
+        let fm = FileManager.default
+        let baseDocs = fm.urls(for: .documentDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
+        let exportDir = baseDocs.appendingPathComponent("R1_Exports", isDirectory: true)
+        #if os(iOS)
+        try? fm.createDirectory(
+            at: exportDir,
+            withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.none]
+        )
+        try? fm.setAttributes([.protectionKey: FileProtectionType.none], ofItemAtPath: exportDir.path)
+        #else
+        try? fm.createDirectory(at: exportDir, withIntermediateDirectories: true)
+        #endif
+
+        let outURL = exportDir.appendingPathComponent(Self.sanitizedCSVFilename(suffix: filenameSuffix))
+        do {
+            #if os(iOS)
+            try utf8Data.write(to: outURL, options: [.atomic, .noFileProtection])
+            try? fm.setAttributes([.protectionKey: FileProtectionType.none], ofItemAtPath: outURL.path)
+            #else
+            try utf8Data.write(to: outURL, options: .atomic)
+            #endif
+            var rv = URLResourceValues()
+            rv.isExcludedFromBackup = false
+            var mutableURL = outURL
+            try? mutableURL.setResourceValues(rv)
+            return outURL
+        } catch {
+            let fallbackURL = fm.temporaryDirectory.appendingPathComponent(Self.sanitizedCSVFilename(suffix: filenameSuffix))
+            try? utf8Data.write(to: fallbackURL, options: .atomic)
+            return fallbackURL
+        }
+    }
+
+    /// Copies the complete UTF-8 R1 CSV text directly to the system clipboard and returns the number of scan rows copied.
+    @discardableResult
+    public func copyRepeatabilityCSVToClipboard(items subset: [ConsumerScanItem]? = nil) -> Int {
+        let source = subset ?? history
+        let csvText = exportRepeatabilityCSVText(items: source)
+        guard !csvText.isEmpty else { return 0 }
+        #if os(iOS)
+        UIPasteboard.general.string = csvText
+        triggerLightHaptic()
+        #endif
+        return source.count
+    }
+
+    /// Presents a native UIKit `UIActivityViewController` properly anchored for both iPhone and iPad compatibility windows.
+    public func presentNativeCSVShareSheet(items subset: [ConsumerScanItem]? = nil, filenameSuffix: String = "cohort") {
+        guard let fileURL = exportRepeatabilityCSVURL(items: subset, filenameSuffix: filenameSuffix) else {
+            consumerAlertMessage = "No scans available to export yet."
+            return
+        }
+        #if os(iOS)
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let activeScene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        guard let keyWindow = activeScene?.windows.first(where: \.isKeyWindow) ?? activeScene?.windows.first,
+              var topVC = keyWindow.rootViewController else {
+            consumerAlertMessage = "CSV saved unlocked to Files -> On My Device -> Liquid Analyzer -> R1_Exports/\(fileURL.lastPathComponent)."
+            return
+        }
+        while let presented = topVC.presentedViewController {
+            topVC = presented
+        }
+        let activityVC = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = topVC.view
+            popover.sourceRect = CGRect(
+                x: topVC.view.bounds.midX,
+                y: topVC.view.bounds.midY,
+                width: 1,
+                height: 1
+            )
+            popover.permittedArrowDirections = []
+        }
+        topVC.present(activityVC, animated: true)
+        #endif
     }
 
     private static func csvEscape(_ raw: String) -> String {
@@ -587,6 +682,12 @@ public final class ConsumerScanCoordinator: ObservableObject {
             }
 
             warmAudioEngine.stopWarmBatchEngine()
+            // Auto-save unlocked CSV copies into Documents/R1_Exports/ so they are always available in the Files app
+            _ = exportRepeatabilityCSVURL(items: nil, filenameSuffix: "latest_all")
+            if targetCount > 1 {
+                let batchMembers = history.filter { $0.batchRunID == batchRunID }
+                _ = exportRepeatabilityCSVURL(items: batchMembers, filenameSuffix: batchRunID)
+            }
             try? await timing.sleepMilliseconds(120)
             if Task.isCancelled { return }
             scanProgress = 1.0

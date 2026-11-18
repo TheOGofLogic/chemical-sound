@@ -6,6 +6,7 @@ public struct ConsumerScanFlowView: View {
     @ObservedObject private var cameraService: CameraTargetingService
     @State private var activeTuneItem: ConsumerScanItem?
     @State private var calibrationTargetItem: ConsumerScanItem?
+    @State private var copiedSingleScanID: UUID?
 
     public init(coordinator: ConsumerScanCoordinator) {
         self.coordinator = coordinator
@@ -949,6 +950,44 @@ public struct ConsumerScanFlowView: View {
                         .foregroundStyle(.secondary)
                         .padding(.top, 2)
                 }
+
+                HStack(spacing: 8) {
+                    Button {
+                        _ = coordinator.copyRepeatabilityCSVToClipboard(items: [item])
+                        copiedSingleScanID = item.id
+                    } label: {
+                        Label(
+                            copiedSingleScanID == item.id ? "Copied CSV ✓" : "Copy Scan CSV",
+                            systemImage: copiedSingleScanID == item.id ? "checkmark.circle.fill" : "doc.on.doc.fill"
+                        )
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        let suffix = item.scanSequenceNumber.map { "scan_\($0)" } ?? "scan"
+                        coordinator.presentNativeCSVShareSheet(items: [item], filenameSuffix: suffix)
+                    } label: {
+                        Label("Share Scan CSV", systemImage: "square.and.arrow.up")
+                            .font(.system(size: 10.5, weight: .bold))
+                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, 4)
             }
         }
         .font(.caption2)
