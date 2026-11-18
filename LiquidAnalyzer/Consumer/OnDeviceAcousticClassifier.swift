@@ -125,13 +125,13 @@ public struct OnDeviceAcousticClassifier: Sendable {
             let dCent = (features.spectralCentroidHz - prof.expectedCentroidHz) / 650.0
             let dBand = (features.midToHighBandDB - prof.expectedMidToHighDB) / 3.8
             let dDecay = (features.decaySlopeDBPerSec - prof.expectedDecayDBPerSec) / 38.0
-            let dScatter = (features.highFreqBubbleScatterDB - prof.expectedHighScatterDB) / 4.5
+            let dScatter = (features.highFreqBubbleScatterDB - prof.expectedHighScatterDB) / 3.2
             let rawDist = sqrt(
-                0.30 * dPeak * dPeak +
-                0.25 * dCent * dCent +
-                0.18 * dBand * dBand +
+                0.26 * dPeak * dPeak +
+                0.22 * dCent * dCent +
+                0.16 * dBand * dBand +
                 0.14 * dDecay * dDecay +
-                0.13 * dScatter * dScatter
+                0.22 * dScatter * dScatter
             )
             let weight = candidateSpec.priorMultipliers[prof.id] ?? 1.0
             return (prof, rawDist * weight)

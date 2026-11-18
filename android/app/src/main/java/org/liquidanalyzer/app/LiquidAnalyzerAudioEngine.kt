@@ -95,11 +95,11 @@ object ReferenceCatalog {
                 ConstituentItem("H₂O", "Water", "Aqueous solvent reference"),
                 ConstituentItem("NaCl", "Sodium Chloride", "Dissolved salt / electrolyte constituent")
             ),
-            expectedCentroidHz = 3200.0,
+            expectedCentroidHz = 3320.0,
             expectedPeakHz = 2780.0,
-            expectedMidToHighDb = 0.8,
-            expectedDecayDbPerSec = 66.0,
-            expectedHighScatterDb = -7.8,
+            expectedMidToHighDb = 1.8,
+            expectedDecayDbPerSec = 64.0,
+            expectedHighScatterDb = -9.5,
             tuneFrequenciesHz = listOf(392.00, 587.33, 659.25, 739.99, 987.77),
             shimmer = 1.24,
             warmthDecay = 1.55,
@@ -113,11 +113,11 @@ object ReferenceCatalog {
                 ConstituentItem("H₂O", "Water", "Primary aqueous stabilizer phase"),
                 ConstituentItem("H₂O₂", "Hydrogen Peroxide", "Reactive oxygen & micro-bubble constituent")
             ),
-            expectedCentroidHz = 3060.0,
+            expectedCentroidHz = 3760.0,
             expectedPeakHz = 2480.0,
             expectedMidToHighDb = 1.2,
-            expectedDecayDbPerSec = 96.0,
-            expectedHighScatterDb = -2.2,
+            expectedDecayDbPerSec = 78.0,
+            expectedHighScatterDb = -2.8,
             tuneFrequenciesHz = listOf(329.63, 493.88, 659.25, 830.61, 987.77),
             shimmer = 1.30,
             warmthDecay = 1.68,
@@ -451,8 +451,8 @@ class LiquidAnalyzerAudioEngine(private val context: Context) {
             val dc = (centroidHz - prof.expectedCentroidHz) / 650.0
             val db = (midToHighDb - prof.expectedMidToHighDb) / 3.8
             val dd = (decayDbPerSec - prof.expectedDecayDbPerSec) / 38.0
-            val ds = (highScatterDb - prof.expectedHighScatterDb) / 4.5
-            val dist = sqrt(0.30 * dp * dp + 0.25 * dc * dc + 0.18 * db * db + 0.14 * dd * dd + 0.13 * ds * ds)
+            val ds = (highScatterDb - prof.expectedHighScatterDb) / 3.2
+            val dist = sqrt(0.26 * dp * dp + 0.22 * dc * dc + 0.16 * db * db + 0.14 * dd * dd + 0.22 * ds * ds)
             prof to dist
         }.sortedBy { it.second }
 

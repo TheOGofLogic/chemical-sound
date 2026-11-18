@@ -244,7 +244,7 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
             expectedPeakHz: 2_220.0,
             expectedMidToHighDB: 3.8,
             expectedDecayDBPerSec: 76.0,
-            expectedHighScatterDB: -8.5,
+            expectedHighScatterDB: -8.8,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O",
                 mappingSummary: "Mapped musical representation of hydrogen-oxygen reference intervals and measured resonance.",
@@ -270,11 +270,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Dissolved salt / electrolyte constituent"
                 )
             ],
-            expectedCentroidHz: 3_200.0,
+            expectedCentroidHz: 3_320.0,
             expectedPeakHz: 2_780.0,
-            expectedMidToHighDB: 0.8,
-            expectedDecayDBPerSec: 66.0,
-            expectedHighScatterDB: -7.8,
+            expectedMidToHighDB: 1.8,
+            expectedDecayDBPerSec: 64.0,
+            expectedHighScatterDB: -9.5,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + NaCl",
                 mappingSummary: "Mapped musical representation combining water harmonics with bright high-Q ionic fifth and ninth intervals.",
@@ -300,11 +300,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Reactive oxygen & micro-bubble constituent"
                 )
             ],
-            expectedCentroidHz: 3_060.0,
+            expectedCentroidHz: 3_760.0,
             expectedPeakHz: 2_480.0,
             expectedMidToHighDB: 1.2,
-            expectedDecayDBPerSec: 96.0,
-            expectedHighScatterDB: -2.2,
+            expectedDecayDBPerSec: 78.0,
+            expectedHighScatterDB: -2.8,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + H₂O₂",
                 mappingSummary: "Mapped musical representation pairing aqueous fundamentals with sparkling high-register oxygen-bond overtones.",
