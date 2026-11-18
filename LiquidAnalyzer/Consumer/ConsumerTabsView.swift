@@ -193,8 +193,8 @@ public struct ConsumerLearnView: View {
                     learnCard(
                         icon: "checkmark.seal.fill",
                         accent: LiquidAnalyzerPalette.resultGreenStart,
-                        title: "2. Experimental Reference Matching",
-                        bodyText: "Different liquids and containers vibrate and ring down differently. Liquid Analyzer extracts resonance features from the recorded echo and estimates whether they resemble a characterized reference profile."
+                        title: "2. Indirect Acoustic Inference",
+                        bodyText: "Like radar and acoustic resonance sensors, Liquid Analyzer transmits a known sound sweep and analyzes the returned echo across multiple frequency bands, cavity ring-down, and scatter—comparing that signature against reference and calibrated standards."
                     )
 
                     learnCard(
@@ -275,6 +275,15 @@ public struct ConsumerMoreView: View {
                     Toggle("Vibration Feedback", isOn: $consumer.hapticsEnabled)
                 }
 
+                Section("Calibrated Standards") {
+                    LabeledContent("Saved Acoustic Standards", value: "\(consumer.calibratedPrototypes.count)")
+                    if !consumer.calibratedPrototypes.isEmpty {
+                        Button("Reset Calibrated Standards", role: .destructive) {
+                            consumer.clearCalibratedStandards()
+                        }
+                    }
+                }
+
                 Section("For Research & Education") {
                     Text("Liquid Analyzer is an experimental acoustic liquid-analysis platform. Results reflect empirical similarity to reference profiles and must not be used to judge drinkability, chemical purity, medical suitability, or safety.")
                         .font(.footnote)
@@ -291,7 +300,7 @@ public struct ConsumerMoreView: View {
 
                 Section("About") {
                     LabeledContent("Application", value: "Liquid Analyzer")
-                    LabeledContent("Version", value: "0.3.2 (Build 7)")
+                    LabeledContent("Version", value: "0.3.3 (Build 8)")
                 }
             }
             .navigationTitle("More")

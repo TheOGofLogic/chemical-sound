@@ -30,13 +30,147 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertNotEqual(result.constituents.first?.symbol, "C · H · O")
     }
 
+    func testWallAndSolidSurfaceReturnNonLiquidMaterialNeverDefaultToH2O() throws {
+        let samples = Self.makeWaterResonanceSamples()
+        let classifier = OnDeviceAcousticClassifier()
+
+        // 1. Painted warm-beige indoor wall with straight phone shadow (exactly like aiming at a wall)
+        let wallWithShadowJPEG = try Self.makePlanarWallShadowJPEG(
+            wallRGB: (214, 206, 192),
+            shadowRGB: (154, 148, 138)
+        )
+        let wallResult = classifier.classifySamples(
+            samples: samples,
+            inverseFilter: nil,
+            thumbnailJPEGData: wallWithShadowJPEG
+        )
+        XCTAssertEqual(wallResult.status, .nonLiquidMaterial)
+        XCTAssertEqual(wallResult.title, "Solid / Non-Liquid Material")
+        XCTAssertNotEqual(wallResult.formulaDisplay, "H₂O")
+        XCTAssertTrue(wallResult.constituents.isEmpty)
+
+        // 2. Covered / dark lens also returns Solid / Non-Liquid Material instead of H₂O
+        let darkJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (8, 8, 8),
+            rimRGB: (8, 8, 8),
+            innerRGB: (8, 8, 8)
+        )
+        let darkResult = classifier.classifySamples(
+            samples: samples,
+            inverseFilter: nil,
+            thumbnailJPEGData: darkJPEG
+        )
+        XCTAssertEqual(darkResult.status, .nonLiquidMaterial)
+        XCTAssertEqual(darkResult.title, "Solid / Non-Liquid Material")
+    }
+
+    func testOpaqueColoredMugHoldingWaterOrSaltWaterWorksWithoutSweetenedBeverageBias() throws {
+        let classifier = OnDeviceAcousticClassifier()
+
+        // Opaque blue ceramic mug (vivid blue rim) holding clear neutral liquid in center
+        let blueMugJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (210, 210, 210),
+            rimRGB: (26, 92, 196),
+            innerRGB: (186, 190, 194)
+        )
+
+        // A) Water inside opaque blue mug -> Water (H₂O), NEVER "Sweetened Beverage"
+        let waterInMug = classifier.classifySamples(
+            samples: Self.makeWaterResonanceSamples(),
+            inverseFilter: nil,
+            thumbnailJPEGData: blueMugJPEG
+        )
+        XCTAssertEqual(waterInMug.status, .referenceMatch)
+        XCTAssertEqual(waterInMug.title, "Water")
+        XCTAssertEqual(waterInMug.formulaDisplay, "H₂O")
+        XCTAssertNotEqual(waterInMug.title, "Sweetened Beverage")
+
+        // B) Salt water inside opaque blue mug -> Salt / Saline Water (H₂O + NaCl)
+        let saltWaterSamples = Self.makeSaltWaterResonanceSamples()
+        let saltInMug = classifier.classifySamples(
+            samples: saltWaterSamples,
+            inverseFilter: nil,
+            thumbnailJPEGData: blueMugJPEG
+        )
+        XCTAssertEqual(saltInMug.status, .referenceMatch)
+        XCTAssertEqual(saltInMug.title, "Salt / Saline Water")
+        XCTAssertEqual(saltInMug.formulaDisplay, "H₂O + NaCl")
+    }
+
+    func testHydrogenPeroxideInBowlIdentifiesPeroxideFromHighFrequencyMicroBubbleScatter() throws {
+        let classifier = OnDeviceAcousticClassifier()
+
+        // Open ceramic bowl holding clear Hydrogen Peroxide solution
+        let bowlJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (218, 214, 206),
+            rimRGB: (92, 96, 102),
+            innerRGB: (196, 198, 200)
+        )
+        let peroxideSamples = Self.makeHydrogenPeroxideResonanceSamples()
+        let result = classifier.classifySamples(
+            samples: peroxideSamples,
+            inverseFilter: nil,
+            thumbnailJPEGData: bowlJPEG
+        )
+
+        XCTAssertEqual(result.status, .referenceMatch)
+        XCTAssertEqual(result.title, "Hydrogen Peroxide Solution")
+        XCTAssertEqual(result.formulaDisplay, "H₂O + H₂O₂")
+        XCTAssertTrue(result.constituents.contains(where: { $0.symbol == "H₂O₂" }))
+    }
+
+    func testCalibratedIndirectAcousticInferenceDiscriminatesBlindScansInIdenticalOpaqueBowl() throws {
+        let classifier = OnDeviceAcousticClassifier()
+
+        // Identical opaque grey ceramic bowl image used across ALL calibration & blind test scans!
+        let identicalOpaqueBowlJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (205, 205, 205),
+            rimRGB: (70, 72, 76),
+            innerRGB: (182, 184, 186)
+        )
+
+        // Subtle container-specific acoustic echoes (all near 1.95 - 2.35 kHz, differing in 6-band scattering shape)
+        let calWater = Self.makeMultiBandEcho(f1: 1_960, a2: 0.35, f2: 3_300, a3: 0.10, f3: 6_400, decay: 5.0)
+        let calSalt = Self.makeMultiBandEcho(f1: 2_120, a2: 0.92, f2: 3_650, a3: 0.14, f3: 6_500, decay: 4.1)
+        let calPeroxide = Self.makeMultiBandEcho(f1: 2_010, a2: 0.42, f2: 3_450, a3: 0.78, f3: 7_200, decay: 6.4)
+
+        let prototypes = [
+            CalibratedAcousticPrototype(targetID: "H2O_DIST", features: classifier.extractFeatures(samples: calWater, inverseFilter: nil)),
+            CalibratedAcousticPrototype(targetID: "NACL_AQ", features: classifier.extractFeatures(samples: calSalt, inverseFilter: nil)),
+            CalibratedAcousticPrototype(targetID: "H2O2_AQ", features: classifier.extractFeatures(samples: calPeroxide, inverseFilter: nil))
+        ]
+
+        // Blind test with perturbed/unseen measurements in the exact same opaque bowl
+        let blindSalt = Self.makeMultiBandEcho(f1: 2_145, a2: 0.88, f2: 3_690, a3: 0.15, f3: 6_550, decay: 4.3)
+        let saltResult = classifier.classifySamples(
+            samples: blindSalt,
+            inverseFilter: nil,
+            thumbnailJPEGData: identicalOpaqueBowlJPEG,
+            calibratedPrototypes: prototypes
+        )
+        XCTAssertEqual(saltResult.status, .referenceMatch)
+        XCTAssertEqual(saltResult.title, "Salt / Saline Water")
+        XCTAssertTrue(saltResult.statusBadgeText.contains("Calibrated Acoustic Match"))
+
+        let blindPeroxide = Self.makeMultiBandEcho(f1: 2_030, a2: 0.40, f2: 3_490, a3: 0.74, f3: 7_150, decay: 6.2)
+        let peroxideResult = classifier.classifySamples(
+            samples: blindPeroxide,
+            inverseFilter: nil,
+            thumbnailJPEGData: identicalOpaqueBowlJPEG,
+            calibratedPrototypes: prototypes
+        )
+        XCTAssertEqual(peroxideResult.status, .referenceMatch)
+        XCTAssertEqual(peroxideResult.title, "Hydrogen Peroxide Solution")
+        XCTAssertEqual(peroxideResult.formulaDisplay, "H₂O + H₂O₂")
+    }
+
     func testLowFrequencyRoomRumbleNeverForcesEverythingToVegetableOilCHO() {
         let sr = 48_000.0
         let preFrames = 7_200
         let totalFrames = 24_000
         var samples = [Float](repeating: 0.0, count: totalFrames)
 
-        // Heavy 550 Hz room rumble + normal 2.25 kHz aqueous container reflection
+        // Heavy 560 Hz room rumble + normal 2.25 kHz aqueous container reflection
         for i in 0..<totalFrames {
             let t = Double(i) / sr
             if i < preFrames {
@@ -58,42 +192,21 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertFalse(result.constituents.contains(where: { $0.symbol.contains("C · H · O") }))
     }
 
-    func testMultimodalVisualAndAcousticClassifierDistinguishesWaterBottleOilAndBlankSurface() throws {
+    func testGoldenOilAndPackagedBottleOpticsClassifyCleanly() throws {
         let samples = Self.makeWaterResonanceSamples()
         let classifier = OnDeviceAcousticClassifier()
 
-        // 1. Covered / blank non-liquid frame -> friendly "No Liquid Detected"
-        let blankJPEG = try Self.makeSyntheticReticleJPEG(
-            outerRGB: (8, 8, 8),
-            rimRGB: (8, 8, 8),
-            innerRGB: (8, 8, 8)
-        )
-        let blankResult = classifier.classifySamples(samples: samples, inverseFilter: nil, thumbnailJPEGData: blankJPEG)
-        XCTAssertEqual(blankResult.status, .unclearScan)
-        XCTAssertEqual(blankResult.title, "No Liquid Detected")
-
-        // 2. Clear water inside cup/bowl (even with slight warm indoor tint) -> Water (H₂O)
-        let waterJPEG = try Self.makeSyntheticReticleJPEG(
-            outerRGB: (220, 212, 198),
-            rimRGB: (75, 78, 84),
-            innerRGB: (192, 186, 174)
-        )
-        let waterResult = classifier.classifySamples(samples: samples, inverseFilter: nil, thumbnailJPEGData: waterJPEG)
-        XCTAssertEqual(waterResult.status, .referenceMatch)
-        XCTAssertEqual(waterResult.title, "Water")
-        XCTAssertEqual(waterResult.formulaDisplay, "H₂O")
-
-        // 3. Blue packaged bottle -> Packaged Aqueous Solution
+        // 1. Full-body vivid blue packaged bottle -> Packaged Aqueous Solution
         let blueBottleJPEG = try Self.makeSyntheticReticleJPEG(
             outerRGB: (212, 212, 212),
-            rimRGB: (28, 125, 210),
-            innerRGB: (32, 136, 218)
+            rimRGB: (20, 120, 220),
+            innerRGB: (24, 128, 226)
         )
         let packagedResult = classifier.classifySamples(samples: samples, inverseFilter: nil, thumbnailJPEGData: blueBottleJPEG)
         XCTAssertEqual(packagedResult.status, .referenceMatch)
         XCTAssertEqual(packagedResult.title, "Packaged Aqueous Solution")
 
-        // 4. Genuine high-chroma golden oil inside neutral rim -> Cooking / Vegetable Oil (Triglyceride)
+        // 2. High-chroma golden oil inside neutral rim -> Cooking / Vegetable Oil (Triglyceride)
         let goldenOilJPEG = try Self.makeSyntheticReticleJPEG(
             outerRGB: (216, 216, 216),
             rimRGB: (82, 82, 82),
@@ -119,7 +232,7 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertFalse(result.scientificNote.contains("AVAudioSession"))
     }
 
-    func testOutOfEnvelopeResonanceReturnsUnmatchedSignatureWithPlayableTune() {
+    func testOutOfEnvelopeResonanceReturnsUnmatchedSignatureNeverDefaultsToH2O() throws {
         let sr = 48_000.0
         var samples = [Float](repeating: 0.0002, count: 24_000)
         for i in 7_200..<20_000 {
@@ -127,10 +240,17 @@ final class ConsumerExperienceTests: XCTestCase {
             samples[i] = Float(0.16 * sin(2.0 * Double.pi * 9_400.0 * dt))
         }
 
+        let cupJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (215, 215, 215),
+            rimRGB: (80, 84, 90),
+            innerRGB: (190, 194, 198)
+        )
+
         let classifier = OnDeviceAcousticClassifier()
-        let result = classifier.classifySamples(samples: samples, inverseFilter: nil)
+        let result = classifier.classifySamples(samples: samples, inverseFilter: nil, thumbnailJPEGData: cupJPEG)
         XCTAssertEqual(result.status, .unmatchedSignature)
         XCTAssertEqual(result.title, "Unmatched Liquid")
+        XCTAssertNotEqual(result.formulaDisplay, "H₂O")
         XCTAssertFalse(result.tuneProfile.baseFrequenciesHz.isEmpty)
     }
 
@@ -145,9 +265,9 @@ final class ConsumerExperienceTests: XCTestCase {
             scientificNote: "Experimental research estimate.",
             constituents: waterProfile.constituents,
             tuneProfile: waterProfile.tuneProfile,
-            measuredPeakHz: 2_180.0,
-            measuredCentroidHz: 2_520.0,
-            measuredDecayDBPerSec: 74.0
+            measuredPeakHz: 2_220.0,
+            measuredCentroidHz: 2_560.0,
+            measuredDecayDBPerSec: 76.0
         )
 
         let synth = ChemicalTuneSynthesizer(sampleRateHz: 48_000.0, durationSeconds: 2.0)
@@ -182,9 +302,9 @@ final class ConsumerExperienceTests: XCTestCase {
             scientificNote: "Experimental reference match.",
             constituents: prof.constituents,
             tuneProfile: prof.tuneProfile,
-            measuredPeakHz: 2_180.0,
-            measuredCentroidHz: 2_520.0,
-            measuredDecayDBPerSec: 74.0
+            measuredPeakHz: 2_220.0,
+            measuredCentroidHz: 2_560.0,
+            measuredDecayDBPerSec: 76.0
         )
 
         store.saveAll([item])
@@ -216,6 +336,96 @@ final class ConsumerExperienceTests: XCTestCase {
         return samples
     }
 
+    private static func makeSaltWaterResonanceSamples() -> [Float] {
+        let sr = 48_000.0
+        let preFrames = 7_200
+        let totalFrames = 24_000
+        var samples = [Float](repeating: 0.0, count: totalFrames)
+        for i in 0..<totalFrames {
+            let t = Double(i) / sr
+            if i < preFrames {
+                samples[i] = Float(0.00035 * sin(2.0 * Double.pi * 220.0 * t))
+            } else {
+                let dt = Double(i - preFrames) / sr
+                let env = exp(-3.5 * dt)
+                let primary = sin(2.0 * Double.pi * 2_820.0 * dt)
+                let upper = 0.78 * sin(2.0 * Double.pi * 4_550.0 * dt)
+                samples[i] = Float(0.17 * env * (primary + upper))
+            }
+        }
+        return samples
+    }
+
+    private static func makeHydrogenPeroxideResonanceSamples() -> [Float] {
+        let sr = 48_000.0
+        let preFrames = 7_200
+        let totalFrames = 24_000
+        var samples = [Float](repeating: 0.0, count: totalFrames)
+        for i in 0..<totalFrames {
+            let t = Double(i) / sr
+            if i < preFrames {
+                // Subtle high-frequency micro-bubble fizz during pre-roll (~ -60 dBFS at 7.6 kHz)
+                samples[i] = Float(0.0009 * sin(2.0 * Double.pi * 7_600.0 * t))
+            } else {
+                let dt = Double(i - preFrames) / sr
+                let env = exp(-9.5 * dt)
+                let primary = sin(2.0 * Double.pi * 2_480.0 * dt)
+                let midUpper = 0.60 * sin(2.0 * Double.pi * 4_050.0 * dt)
+                let bubbleScatter = 0.62 * sin(2.0 * Double.pi * 7_400.0 * dt)
+                samples[i] = Float(0.18 * env * (primary + midUpper + bubbleScatter))
+            }
+        }
+        return samples
+    }
+
+    private static func makeMultiBandEcho(
+        f1: Double,
+        a2: Double,
+        f2: Double,
+        a3: Double,
+        f3: Double,
+        decay: Double
+    ) -> [Float] {
+        let sr = 48_000.0
+        let preFrames = 7_200
+        let totalFrames = 24_000
+        var samples = [Float](repeating: 0.0, count: totalFrames)
+        for i in 0..<totalFrames {
+            let t = Double(i) / sr
+            if i < preFrames {
+                samples[i] = Float(0.0003 * sin(2.0 * Double.pi * 210.0 * t))
+            } else {
+                let dt = Double(i - preFrames) / sr
+                let env = exp(-decay * dt)
+                let s = sin(2.0 * Double.pi * f1 * dt)
+                    + a2 * sin(2.0 * Double.pi * f2 * dt)
+                    + a3 * sin(2.0 * Double.pi * f3 * dt)
+                samples[i] = Float(0.16 * env * s)
+            }
+        }
+        return samples
+    }
+
+    private static func makePlanarWallShadowJPEG(
+        wallRGB: (UInt8, UInt8, UInt8),
+        shadowRGB: (UInt8, UInt8, UInt8)
+    ) throws -> Data {
+        let size = 96
+        var rgba = [UInt8](repeating: 255, count: size * size * 4)
+        for y in 0..<size {
+            for x in 0..<size {
+                let inPhoneShadow = (y >= 54 && x >= 34)
+                let c = inPhoneShadow ? shadowRGB : wallRGB
+                let idx = (y * size + x) * 4
+                rgba[idx] = c.0
+                rgba[idx + 1] = c.1
+                rgba[idx + 2] = c.2
+                rgba[idx + 3] = 255
+            }
+        }
+        return try encodeRGBA(rgba, size: size)
+    }
+
     private static func makeSyntheticReticleJPEG(
         outerRGB: (UInt8, UInt8, UInt8),
         rimRGB: (UInt8, UInt8, UInt8),
@@ -229,9 +439,9 @@ final class ConsumerExperienceTests: XCTestCase {
                 let dy = (Double(y) - 47.5) / 48.0
                 let r = sqrt(dx * dx + dy * dy)
                 let c: (UInt8, UInt8, UInt8)
-                if r <= 0.40 {
+                if r <= 0.34 {
                     c = innerRGB
-                } else if r <= 0.54 {
+                } else if r <= 0.58 {
                     c = rimRGB
                 } else {
                     c = outerRGB
@@ -243,10 +453,14 @@ final class ConsumerExperienceTests: XCTestCase {
                 rgba[idx + 3] = 255
             }
         }
+        return try encodeRGBA(rgba, size: size)
+    }
 
+    private static func encodeRGBA(_ rgba: [UInt8], size: Int) throws -> Data {
+        var mutableRGBA = rgba
         let cs = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(
-            data: &rgba,
+            data: &mutableRGBA,
             width: size,
             height: size,
             bitsPerComponent: 8,

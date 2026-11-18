@@ -47,6 +47,7 @@ data class LiquidReferenceProfile(
     val expectedPeakHz: Double,
     val expectedMidToHighDb: Double,
     val expectedDecayDbPerSec: Double,
+    val expectedHighScatterDb: Double = -8.0,
     val tuneFrequenciesHz: List<Double>,
     val shimmer: Double,
     val warmthDecay: Double,
@@ -76,10 +77,11 @@ object ReferenceCatalog {
             displayName = "Water",
             formulaDisplay = "H₂O",
             constituents = listOf(ConstituentItem("H₂O", "Water", "Primary aqueous reference constituent")),
-            expectedCentroidHz = 2520.0,
-            expectedPeakHz = 2180.0,
-            expectedMidToHighDb = 4.2,
-            expectedDecayDbPerSec = 74.0,
+            expectedCentroidHz = 2560.0,
+            expectedPeakHz = 2220.0,
+            expectedMidToHighDb = 3.8,
+            expectedDecayDbPerSec = 76.0,
+            expectedHighScatterDb = -8.5,
             tuneFrequenciesHz = listOf(392.00, 493.88, 587.33, 783.99, 880.00),
             shimmer = 1.06,
             warmthDecay = 1.45,
@@ -87,20 +89,39 @@ object ReferenceCatalog {
         ),
         LiquidReferenceProfile(
             id = "NACL_AQ",
-            displayName = "Saline Water",
+            displayName = "Salt / Saline Water",
             formulaDisplay = "H₂O + NaCl",
             constituents = listOf(
                 ConstituentItem("H₂O", "Water", "Aqueous solvent reference"),
-                ConstituentItem("NaCl", "Sodium Chloride", "Dissolved salt reference constituent")
+                ConstituentItem("NaCl", "Sodium Chloride", "Dissolved salt / electrolyte constituent")
             ),
-            expectedCentroidHz = 2720.0,
-            expectedPeakHz = 2520.0,
-            expectedMidToHighDb = 3.1,
-            expectedDecayDbPerSec = 96.0,
+            expectedCentroidHz = 3200.0,
+            expectedPeakHz = 2780.0,
+            expectedMidToHighDb = 0.8,
+            expectedDecayDbPerSec = 66.0,
+            expectedHighScatterDb = -7.8,
             tuneFrequenciesHz = listOf(392.00, 587.33, 659.25, 739.99, 987.77),
-            shimmer = 1.22,
-            warmthDecay = 1.65,
+            shimmer = 1.24,
+            warmthDecay = 1.55,
             tuneSummary = "Mapped musical representation combining water harmonics with bright ionic fifth and ninth intervals."
+        ),
+        LiquidReferenceProfile(
+            id = "H2O2_AQ",
+            displayName = "Hydrogen Peroxide Solution",
+            formulaDisplay = "H₂O + H₂O₂",
+            constituents = listOf(
+                ConstituentItem("H₂O", "Water", "Primary aqueous stabilizer phase"),
+                ConstituentItem("H₂O₂", "Hydrogen Peroxide", "Reactive oxygen & micro-bubble constituent")
+            ),
+            expectedCentroidHz = 3060.0,
+            expectedPeakHz = 2480.0,
+            expectedMidToHighDb = 1.2,
+            expectedDecayDbPerSec = 96.0,
+            expectedHighScatterDb = -2.2,
+            tuneFrequenciesHz = listOf(329.63, 493.88, 659.25, 830.61, 987.77),
+            shimmer = 1.30,
+            warmthDecay = 1.68,
+            tuneSummary = "Mapped musical representation pairing aqueous fundamentals with sparkling oxygen-bond overtones."
         ),
         LiquidReferenceProfile(
             id = "SUC_AQ",
@@ -333,35 +354,53 @@ class LiquidAnalyzerAudioEngine(private val context: Context) {
         fftRadix2(real, imag)
 
         val binHz = sampleRate.toDouble() / nFft.toDouble()
-        val minBin = (1100.0 / binHz).toInt().coerceAtLeast(1)
-        val maxBin = (9800.0 / binHz).toInt().coerceAtMost(nFft / 2 - 1)
+        val minBin = (1200.0 / binHz).toInt().coerceAtLeast(1)
+        val maxBin = (9600.0 / binHz).toInt().coerceAtMost(nFft / 2 - 1)
+        val maxScatterBin = (11800.0 / binHz).toInt().coerceAtMost(nFft / 2 - 1)
 
         var weightedFreq = 0.0
         var totalPower = 1e-15
-        var bestPower = -1.0
-        var dominantHz = 2180.0
+        var bestPower = 1e-15
+        var dominantHz = 2220.0
         var midPower = 1e-15
         var highPower = 1e-15
+        var corePower = 1e-15
+        var upperScatterPower = 1e-15
+        var logPowerSum = 0.0
+        var flatCount = 0
 
-        for (b in minBin..maxBin) {
+        for (b in minBin..maxScatterBin) {
             val rawP = real[b] * real[b] + imag[b] * imag[b]
             val f = b * binHz
-            val normAbove = max(0.0, (f - 2200.0) / 2800.0)
-            val speakerWeight = 1.0 / (1.0 + 1.55 * normAbove.pow(1.45))
+            val normAbove = max(0.0, (f - 3200.0) / 3800.0)
+            val speakerWeight = 1.0 / (1.0 + 0.28 * normAbove.pow(1.3))
             val p = rawP * speakerWeight
-            weightedFreq += f * p
-            totalPower += p
-            if (p > bestPower) {
-                bestPower = p
-                dominantHz = f
+
+            if (b <= maxBin) {
+                weightedFreq += f * p
+                totalPower += p
+                if (p > bestPower) {
+                    bestPower = p
+                    dominantHz = f
+                }
+                if (f in 1200.0..3200.0) midPower += p
+                else if (f in 3200.0..9600.0) highPower += p
+                if (f <= 8500.0) {
+                    logPowerSum += ln(max(p, 1e-18))
+                    flatCount++
+                }
             }
-            if (f in 1100.0..3500.0) midPower += p
-            else if (f in 3500.0..9800.0) highPower += p
+            if (f in 1500.0..4200.0) corePower += p
+            else if (f in 5200.0..11800.0) upperScatterPower += p
         }
 
         val centroidHz = weightedFreq / totalPower
         val midToHighDb = (10.0 * log10(midPower / highPower)).coerceIn(-14.0, 14.0)
-        val decayDbPerSec = 82.0
+        val highScatterDb = (10.0 * log10(upperScatterPower / corePower)).coerceIn(-12.0, 4.0)
+        val meanBinP = if (flatCount > 0) totalPower / flatCount else 1e-15
+        val spectralFlatness = if (flatCount > 0) (exp(logPowerSum / flatCount) / max(meanBinP, 1e-18)).coerceIn(0.0, 1.0) else 0.5
+        val peakProminenceDb = max(0.0, 10.0 * log10(bestPower / max(meanBinP, 1e-18)))
+        val decayDbPerSec = 78.0
         val nowTime = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).format(java.util.Date())
 
         if (clipped > 12 || snrDb < 6.0) {
@@ -382,17 +421,38 @@ class LiquidAnalyzerAudioEngine(private val context: Context) {
             )
         }
 
-        val candidateProfiles = if (dominantHz < 1650.0 && midToHighDb > 5.8) {
-            ReferenceCatalog.profiles
-        } else {
-            ReferenceCatalog.profiles.filter { it.id != "OIL_VEG" }
+        if (spectralFlatness > 0.56 && peakProminenceDb < 7.8) {
+            return ScanResultItem(
+                id = "scan_${System.currentTimeMillis()}",
+                timestampLabel = nowTime,
+                status = MatchStatus.INVALID_MEASUREMENT,
+                title = "Solid / Non-Liquid Material",
+                formulaDisplay = "No Liquid Container Detected",
+                badgeText = "Solid Surface • Aim at a Liquid",
+                scientificNote = "Broadband specular reflection indicates a flat solid surface (such as a wall or table) rather than a liquid container. Point at a cup, glass, mug, bowl, or bottle holding liquid.",
+                constituents = emptyList(),
+                tuneFrequenciesHz = listOf(392.0, 493.88, 587.33, 783.99),
+                shimmer = 1.0,
+                warmthDecay = 1.6,
+                tuneSummary = "Surface reflection echo.",
+                measuredPeakHz = dominantHz
+            )
+        }
+
+        val candidateProfiles = ReferenceCatalog.profiles.filter { prof ->
+            when (prof.id) {
+                "OIL_VEG" -> dominantHz < 1650.0 && midToHighDb > 6.0
+                "SUC_AQ" -> dominantHz < 1900.0 && midToHighDb > 5.8
+                else -> true
+            }
         }
         val ranked = candidateProfiles.map { prof ->
-            val dp = (dominantHz - prof.expectedPeakHz) / 620.0
-            val dc = (centroidHz - prof.expectedCentroidHz) / 700.0
-            val db = (midToHighDb - prof.expectedMidToHighDb) / 4.0
-            val dd = (decayDbPerSec - prof.expectedDecayDbPerSec) / 42.0
-            val dist = sqrt(0.35 * dp * dp + 0.30 * dc * dc + 0.20 * db * db + 0.15 * dd * dd)
+            val dp = (dominantHz - prof.expectedPeakHz) / 580.0
+            val dc = (centroidHz - prof.expectedCentroidHz) / 650.0
+            val db = (midToHighDb - prof.expectedMidToHighDb) / 3.8
+            val dd = (decayDbPerSec - prof.expectedDecayDbPerSec) / 38.0
+            val ds = (highScatterDb - prof.expectedHighScatterDb) / 4.5
+            val dist = sqrt(0.30 * dp * dp + 0.25 * dc * dc + 0.18 * db * db + 0.14 * dd * dd + 0.13 * ds * ds)
             prof to dist
         }.sortedBy { it.second }
 

@@ -16,11 +16,134 @@ public enum ScanFlowStep: Equatable, Sendable {
     case result(ConsumerScanItem)
 }
 
-/// Three-state scientific outcome mapped cleanly for consumer display.
+/// Four-state scientific outcome mapped cleanly for consumer display.
 public enum ConsumerMatchStatus: String, Codable, Equatable, Sendable {
     case referenceMatch = "REFERENCE_MATCH"
     case unmatchedSignature = "NO_VALIDATED_MATCH"
+    case nonLiquidMaterial = "NON_LIQUID_SURFACE"
     case unclearScan = "INVALID_MEASUREMENT"
+}
+
+/// Extracted multi-dimensional acoustic scattering & resonance features from a 48 kHz ESS scan.
+/// Captures both macro resonance modes and a 6-band mean-centered scattering profile (radar-style echo signature).
+public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
+    public let activeSNRDB: Double
+    public let peakDBFS: Double
+    public let clippedSamples: Int
+    public let dominantPeakHz: Double
+    public let spectralCentroidHz: Double
+    public let midToHighBandDB: Double
+    public let decaySlopeDBPerSec: Double
+    public let highFreqBubbleScatterDB: Double
+    public let spectralFlatness: Double
+    public let peakProminenceDB: Double
+    public let cavityMultipathDB: Double
+    public let subBandShapeDB: [Double]
+
+    public init(
+        activeSNRDB: Double,
+        peakDBFS: Double,
+        clippedSamples: Int,
+        dominantPeakHz: Double,
+        spectralCentroidHz: Double,
+        midToHighBandDB: Double,
+        decaySlopeDBPerSec: Double,
+        highFreqBubbleScatterDB: Double = -8.5,
+        spectralFlatness: Double = 0.25,
+        peakProminenceDB: Double = 12.0,
+        cavityMultipathDB: Double = -3.0,
+        subBandShapeDB: [Double] = [0, 0, 0, 0, 0, 0]
+    ) {
+        self.activeSNRDB = activeSNRDB
+        self.peakDBFS = peakDBFS
+        self.clippedSamples = clippedSamples
+        self.dominantPeakHz = dominantPeakHz
+        self.spectralCentroidHz = spectralCentroidHz
+        self.midToHighBandDB = midToHighBandDB
+        self.decaySlopeDBPerSec = decaySlopeDBPerSec
+        self.highFreqBubbleScatterDB = highFreqBubbleScatterDB
+        self.spectralFlatness = spectralFlatness
+        self.peakProminenceDB = peakProminenceDB
+        self.cavityMultipathDB = cavityMultipathDB
+        self.subBandShapeDB = subBandShapeDB
+    }
+}
+
+/// Empirical known-standard prototype saved on-device for calibrated indirect acoustic inference.
+public struct CalibratedAcousticPrototype: Codable, Equatable, Identifiable, Sendable {
+    public static let solidSurfaceTargetID = "SOLID_SURFACE"
+
+    public let id: UUID
+    public let createdAt: Date
+    public let targetID: String
+    public let features: ExtractedConsumerFeatures
+
+    public init(
+        id: UUID = UUID(),
+        createdAt: Date = Date(),
+        targetID: String,
+        features: ExtractedConsumerFeatures
+    ) {
+        self.id = id
+        self.createdAt = createdAt
+        self.targetID = targetID
+        self.features = features
+    }
+}
+
+/// Thread-safe persistent store for user-calibrated known liquid & solid-surface acoustic standards.
+public final class CalibratedPrototypeStore: @unchecked Sendable {
+    public let fileURL: URL
+    private let lock = NSLock()
+
+    public init(fileURL: URL? = nil) {
+        if let fileURL {
+            self.fileURL = fileURL
+        } else {
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
+            self.fileURL = docs
+                .appendingPathComponent("LiquidAnalyzerSessions", isDirectory: true)
+                .appendingPathComponent("calibrated_prototypes.json")
+        }
+    }
+
+    public func loadAll() -> [CalibratedAcousticPrototype] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard FileManager.default.fileExists(atPath: fileURL.path),
+              let data = try? Data(contentsOf: fileURL) else {
+            return []
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([CalibratedAcousticPrototype].self, from: data)) ?? []
+    }
+
+    public func append(_ prototype: CalibratedAcousticPrototype) {
+        var current = loadAll()
+        current.insert(prototype, at: 0)
+        if current.count > 120 {
+            current = Array(current.prefix(120))
+        }
+        saveAll(current)
+    }
+
+    public func clearAll() {
+        saveAll([])
+    }
+
+    public func saveAll(_ items: [CalibratedAcousticPrototype]) {
+        lock.lock()
+        defer { lock.unlock() }
+        let dir = fileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(items) {
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
 }
 
 /// Constituent item displayed in the separated Composition panel.
@@ -75,7 +198,34 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
     public let expectedPeakHz: Double
     public let expectedMidToHighDB: Double
     public let expectedDecayDBPerSec: Double
+    public let expectedHighScatterDB: Double
     public let tuneProfile: ChemicalTuneProfile
+
+    public init(
+        id: String,
+        displayName: String,
+        formulaDisplay: String,
+        categorySummary: String,
+        constituents: [ReferenceConstituent],
+        expectedCentroidHz: Double,
+        expectedPeakHz: Double,
+        expectedMidToHighDB: Double,
+        expectedDecayDBPerSec: Double,
+        expectedHighScatterDB: Double = -8.0,
+        tuneProfile: ChemicalTuneProfile
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.formulaDisplay = formulaDisplay
+        self.categorySummary = categorySummary
+        self.constituents = constituents
+        self.expectedCentroidHz = expectedCentroidHz
+        self.expectedPeakHz = expectedPeakHz
+        self.expectedMidToHighDB = expectedMidToHighDB
+        self.expectedDecayDBPerSec = expectedDecayDBPerSec
+        self.expectedHighScatterDB = expectedHighScatterDB
+        self.tuneProfile = tuneProfile
+    }
 
     public static let provisionalLibrary: [ReferenceLiquidProfile] = [
         ReferenceLiquidProfile(
@@ -90,10 +240,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Primary aqueous reference constituent"
                 )
             ],
-            expectedCentroidHz: 2_520.0,
-            expectedPeakHz: 2_180.0,
-            expectedMidToHighDB: 4.2,
-            expectedDecayDBPerSec: 74.0,
+            expectedCentroidHz: 2_560.0,
+            expectedPeakHz: 2_220.0,
+            expectedMidToHighDB: 3.8,
+            expectedDecayDBPerSec: 76.0,
+            expectedHighScatterDB: -8.5,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O",
                 mappingSummary: "Mapped musical representation of hydrogen-oxygen reference intervals and measured resonance.",
@@ -104,7 +255,7 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
         ),
         ReferenceLiquidProfile(
             id: "NACL_AQ",
-            displayName: "Saline / Electrolyte Water",
+            displayName: "Salt / Saline Water",
             formulaDisplay: "H₂O + NaCl",
             categorySummary: "Aqueous Electrolyte Reference",
             constituents: [
@@ -116,19 +267,50 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                 ReferenceConstituent(
                     symbol: "NaCl",
                     name: "Sodium Chloride",
-                    roleDescription: "Dissolved electrolyte reference constituent"
+                    roleDescription: "Dissolved salt / electrolyte constituent"
                 )
             ],
-            expectedCentroidHz: 3_180.0,
-            expectedPeakHz: 2_820.0,
-            expectedMidToHighDB: 1.2,
-            expectedDecayDBPerSec: 88.0,
+            expectedCentroidHz: 3_200.0,
+            expectedPeakHz: 2_780.0,
+            expectedMidToHighDB: 0.8,
+            expectedDecayDBPerSec: 66.0,
+            expectedHighScatterDB: -7.8,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + NaCl",
-                mappingSummary: "Mapped musical representation combining water harmonics with bright ionic fifth and ninth intervals.",
+                mappingSummary: "Mapped musical representation combining water harmonics with bright high-Q ionic fifth and ninth intervals.",
                 baseFrequenciesHz: [392.00, 587.33, 659.25, 739.99, 987.77], // G4, D5, E5, F#5, B5
-                shimmerMultiplier: 1.22,
-                warmthDecayPerSec: 1.65
+                shimmerMultiplier: 1.24,
+                warmthDecayPerSec: 1.55
+            )
+        ),
+        ReferenceLiquidProfile(
+            id: "H2O2_AQ",
+            displayName: "Hydrogen Peroxide Solution",
+            formulaDisplay: "H₂O + H₂O₂",
+            categorySummary: "Dilute Peroxide / Micro-Bubble Aqueous Reference",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Water",
+                    roleDescription: "Primary aqueous stabilizer phase"
+                ),
+                ReferenceConstituent(
+                    symbol: "H₂O₂",
+                    name: "Hydrogen Peroxide",
+                    roleDescription: "Reactive oxygen & micro-bubble constituent"
+                )
+            ],
+            expectedCentroidHz: 3_060.0,
+            expectedPeakHz: 2_480.0,
+            expectedMidToHighDB: 1.2,
+            expectedDecayDBPerSec: 96.0,
+            expectedHighScatterDB: -2.2,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + H₂O₂",
+                mappingSummary: "Mapped musical representation pairing aqueous fundamentals with sparkling high-register oxygen-bond overtones.",
+                baseFrequenciesHz: [329.63, 493.88, 659.25, 830.61, 987.77], // E4, B4, E5, G#5, B5
+                shimmerMultiplier: 1.30,
+                warmthDecayPerSec: 1.68
             )
         ),
         ReferenceLiquidProfile(
@@ -148,10 +330,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Dilute organic acid constituent"
                 )
             ],
-            expectedCentroidHz: 2_920.0,
-            expectedPeakHz: 2_580.0,
-            expectedMidToHighDB: 2.4,
-            expectedDecayDBPerSec: 96.0,
+            expectedCentroidHz: 2_880.0,
+            expectedPeakHz: 2_520.0,
+            expectedMidToHighDB: 2.1,
+            expectedDecayDBPerSec: 92.0,
+            expectedHighScatterDB: -6.2,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + CH₃COOH",
                 mappingSummary: "Mapped musical representation blending carbon-oxygen intervals with crisp upper harmonics.",
@@ -177,10 +360,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Carbohydrate solute reference constituent"
                 )
             ],
-            expectedCentroidHz: 2_140.0,
-            expectedPeakHz: 1_840.0,
-            expectedMidToHighDB: 5.4,
-            expectedDecayDBPerSec: 108.0,
+            expectedCentroidHz: 2_020.0,
+            expectedPeakHz: 1_740.0,
+            expectedMidToHighDB: 6.6,
+            expectedDecayDBPerSec: 116.0,
+            expectedHighScatterDB: -10.5,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + C₁₂H₂₂O₁₁",
                 mappingSummary: "Mapped musical representation pairing carbon bass intervals with warm damped water harmonics.",
@@ -211,10 +395,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Dispersed colloidal lipid droplets"
                 )
             ],
-            expectedCentroidHz: 2_260.0,
-            expectedPeakHz: 1_960.0,
-            expectedMidToHighDB: 4.8,
+            expectedCentroidHz: 2_240.0,
+            expectedPeakHz: 1_940.0,
+            expectedMidToHighDB: 4.9,
             expectedDecayDBPerSec: 112.0,
+            expectedHighScatterDB: -9.8,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + Lactose",
                 mappingSummary: "Mapped musical representation using soft, warm F-major ninth intervals reflecting colloidal damping.",
@@ -241,9 +426,10 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                 )
             ],
             expectedCentroidHz: 2_680.0,
-            expectedPeakHz: 2_320.0,
-            expectedMidToHighDB: 3.1,
-            expectedDecayDBPerSec: 94.0,
+            expectedPeakHz: 2_340.0,
+            expectedMidToHighDB: 3.0,
+            expectedDecayDBPerSec: 90.0,
+            expectedHighScatterDB: -7.2,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + C₈H₁₀N₄O₂",
                 mappingSummary: "Mapped musical representation blending resonant E-minor ninth harmonics with warm mid-band overtones.",
@@ -274,10 +460,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Dissolved carbohydrate constituent"
                 )
             ],
-            expectedCentroidHz: 2_420.0,
-            expectedPeakHz: 2_080.0,
-            expectedMidToHighDB: 3.9,
+            expectedCentroidHz: 2_400.0,
+            expectedPeakHz: 2_060.0,
+            expectedMidToHighDB: 4.2,
             expectedDecayDBPerSec: 102.0,
+            expectedHighScatterDB: -8.8,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + C₆H₈O₇",
                 mappingSummary: "Mapped musical representation featuring bright C-Lydian intervals for fruit acids and warm harmonic sustain.",
@@ -303,10 +490,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Packaged household, personal-care, or flavored solute class"
                 )
             ],
-            expectedCentroidHz: 2_840.0,
-            expectedPeakHz: 2_460.0,
+            expectedCentroidHz: 2_820.0,
+            expectedPeakHz: 2_440.0,
             expectedMidToHighDB: 2.2,
             expectedDecayDBPerSec: 98.0,
+            expectedHighScatterDB: -6.5,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + Solutes",
                 mappingSummary: "Mapped musical representation pairing shimmering A-major add9 intervals with clean container resonance.",
@@ -332,10 +520,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Aqueous cosolvent"
                 )
             ],
-            expectedCentroidHz: 3_480.0,
-            expectedPeakHz: 3_150.0,
-            expectedMidToHighDB: -0.6,
+            expectedCentroidHz: 3_520.0,
+            expectedPeakHz: 3_180.0,
+            expectedMidToHighDB: -0.8,
             expectedDecayDBPerSec: 80.0,
+            expectedHighScatterDB: -5.4,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "H₂O + C₃H₈O",
                 mappingSummary: "Mapped musical representation using crisp high-register B-minor pentatonic harmonics.",
@@ -356,10 +545,11 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
                     roleDescription: "Viscous lipid reference class"
                 )
             ],
-            expectedCentroidHz: 1_880.0,
-            expectedPeakHz: 1_580.0,
-            expectedMidToHighDB: 6.4,
+            expectedCentroidHz: 1_860.0,
+            expectedPeakHz: 1_560.0,
+            expectedMidToHighDB: 6.8,
             expectedDecayDBPerSec: 128.0,
+            expectedHighScatterDB: -11.2,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "C · H · O",
                 mappingSummary: "Mapped musical representation featuring warm, rapidly damped low-register carbon-chain harmonics.",
@@ -371,7 +561,7 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
     ]
 }
 
-/// Persisted consumer-friendly scan item used by Result, Chemical Tune, and History.
+/// Persisted consumer-friendly scan item used by Result, Chemical Tune, Calibration, and History.
 public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let scannedAt: Date
@@ -386,6 +576,7 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
     public let measuredPeakHz: Double
     public let measuredCentroidHz: Double
     public let measuredDecayDBPerSec: Double
+    public let measuredFeatures: ExtractedConsumerFeatures?
     public let thumbnailJPEGData: Data?
 
     public init(
@@ -402,6 +593,7 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         measuredPeakHz: Double,
         measuredCentroidHz: Double,
         measuredDecayDBPerSec: Double,
+        measuredFeatures: ExtractedConsumerFeatures? = nil,
         thumbnailJPEGData: Data? = nil
     ) {
         self.id = id
@@ -417,6 +609,7 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         self.measuredPeakHz = measuredPeakHz
         self.measuredCentroidHz = measuredCentroidHz
         self.measuredDecayDBPerSec = measuredDecayDBPerSec
+        self.measuredFeatures = measuredFeatures
         self.thumbnailJPEGData = thumbnailJPEGData
     }
 }

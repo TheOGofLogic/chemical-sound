@@ -38,6 +38,7 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
     private let frameLock = NSLock()
 
     private var cachedThumbnailJPEG: Data?
+    private var cachedSceneContextJPEG: Data?
     private var lastThumbnailUptime: TimeInterval = 0
     private var lastAnalysisUptime: TimeInterval = 0
     private var previousLumaGrid: [Double]?
@@ -127,6 +128,12 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         return cachedThumbnailJPEG
     }
 
+    func latestSceneContextJPEG() -> Data? {
+        frameLock.lock()
+        defer { frameLock.unlock() }
+        return cachedSceneContextJPEG
+    }
+
     func captureOutput(
         _ output: AVCaptureOutput,
         didOutput sampleBuffer: CMSampleBuffer,
@@ -139,7 +146,7 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         }
         lastAnalysisUptime = now
 
-        // 1. Fast 16x16 center-reticle steadiness & container/surface contrast check
+        // 1. Fast 16x16 center-reticle steadiness & multi-quadrant container contrast check
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -174,17 +181,22 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         }
         CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
 
-        // Compute spatial contrast inside the reticle (detects cup rim, glass wall, or liquid meniscus/glint)
+        // Require multi-quadrant 2D container structure for auto-lock so aiming at a bare wall does not auto-fire
         var gradientSum = 0.0
+        var quadrantContrast = [Double](repeating: 0.0, count: 4)
         for gy in 0..<15 {
             for gx in 0..<15 {
                 let c = currentGrid[gy * 16 + gx]
                 let dx = abs(currentGrid[gy * 16 + (gx + 1)] - c)
                 let dy = abs(currentGrid[(gy + 1) * 16 + gx] - c)
-                gradientSum += (dx + dy)
+                let g = dx + dy
+                gradientSum += g
+                let qIdx = (gy >= 8 ? 2 : 0) + (gx >= 8 ? 1 : 0)
+                quadrantContrast[qIdx] += g
             }
         }
         let spatialContrast = gradientSum / (2.0 * 225.0)
+        let activeQuadrants = quadrantContrast.filter { ($0 / 112.0) >= 0.018 }.count
 
         frameLock.lock()
         let prev = previousLumaGrid
@@ -201,8 +213,8 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
             motionDiff = diffSum / 256.0
         }
 
-        // Steady hand + visible container/liquid structure (not pitch black or covered lens)
-        let isSteadyOnTarget = armed && meanLuma > 0.06 && spatialContrast > 0.012 && motionDiff < 0.048
+        // Steady hand + multi-quadrant container contrast (prevents auto-triggering on blank walls)
+        let isSteadyOnTarget = armed && meanLuma > 0.06 && spatialContrast > 0.022 && activeQuadrants >= 3 && motionDiff < 0.044
         if isSteadyOnTarget {
             steadyScore = min(1.0, steadyScore + 0.22)
         } else {
@@ -220,14 +232,15 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
 
         callback?(currentScore, fireNow)
 
-        // 2. Periodically refresh silent JPEG thumbnail (~every 0.45 s)
-        guard (now - lastThumbnailUptime) >= 0.45 else { return }
+        // 2. Refresh both center reticle thumbnail AND full wide-angle scene context (~every 0.38 s)
+        guard (now - lastThumbnailUptime) >= 0.38 else { return }
         lastThumbnailUptime = now
 
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
         let extent = ciImage.extent
         guard extent.width > 0, extent.height > 0 else { return }
 
+        // A) Center square reticle crop (320x320) for UI thumbnail & inner meniscus colorimetry
         let side = min(extent.width, extent.height)
         let cropRect = CGRect(
             x: extent.midX - side * 0.5,
@@ -235,15 +248,23 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
             width: side,
             height: side
         )
-        let scale = min(1.0, 320.0 / side)
-        let scaled = ciImage.cropped(to: cropRect).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        guard let cgImg = ciContext.createCGImage(scaled, from: scaled.extent) else { return }
+        let thumbScale = min(1.0, 320.0 / side)
+        let scaledThumb = ciImage.cropped(to: cropRect).transformed(by: CGAffineTransform(scaleX: thumbScale, y: thumbScale))
 
-        if let jpeg = UIImage(cgImage: cgImg).jpegData(compressionQuality: 0.74) {
-            frameLock.lock()
-            cachedThumbnailJPEG = jpeg
-            frameLock.unlock()
-        }
+        // B) Full uncropped wide-angle frame (max dimension 640px) so Vision sees entire cup/mug/bowl rim or wall
+        let maxDim = max(extent.width, extent.height)
+        let fullScale = min(1.0, 640.0 / maxDim)
+        let scaledFull = ciImage.transformed(by: CGAffineTransform(scaleX: fullScale, y: fullScale))
+
+        let thumbJPEG = ciContext.createCGImage(scaledThumb, from: scaledThumb.extent)
+            .flatMap { UIImage(cgImage: $0).jpegData(compressionQuality: 0.76) }
+        let fullJPEG = ciContext.createCGImage(scaledFull, from: scaledFull.extent)
+            .flatMap { UIImage(cgImage: $0).jpegData(compressionQuality: 0.72) }
+
+        frameLock.lock()
+        if let thumbJPEG { cachedThumbnailJPEG = thumbJPEG }
+        if let fullJPEG { cachedSceneContextJPEG = fullJPEG }
+        frameLock.unlock()
     }
 }
 
@@ -287,7 +308,7 @@ public final class CameraTargetingService: ObservableObject {
                 guard let self else { return }
                 self.targetLockProgress = progress
                 if didLock {
-                    self.aimInstructionText = "Liquid Detected — Scanning..."
+                    self.aimInstructionText = "Target Steady — Scanning..."
                     self.onAutoTargetLocked?()
                 } else if progress >= 0.25 {
                     self.aimInstructionText = "Hold steady — locking target..."
@@ -324,6 +345,15 @@ public final class CameraTargetingService: ObservableObject {
         #if os(iOS)
         guard isCameraLive else { return nil }
         return worker.latestThumbnailJPEG()
+        #else
+        return nil
+        #endif
+    }
+
+    public func latestSceneContextJPEG() -> Data? {
+        #if os(iOS)
+        guard isCameraLive else { return nil }
+        return worker.latestSceneContextJPEG()
         #else
         return nil
         #endif

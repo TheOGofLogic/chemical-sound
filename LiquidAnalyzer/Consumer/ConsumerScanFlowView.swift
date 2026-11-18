@@ -5,6 +5,7 @@ public struct ConsumerScanFlowView: View {
     @ObservedObject var coordinator: ConsumerScanCoordinator
     @ObservedObject private var cameraService: CameraTargetingService
     @State private var activeTuneItem: ConsumerScanItem?
+    @State private var calibrationTargetItem: ConsumerScanItem?
 
     public init(coordinator: ConsumerScanCoordinator) {
         self.coordinator = coordinator
@@ -54,6 +55,18 @@ public struct ConsumerScanFlowView: View {
             }
         } message: {
             Text(coordinator.consumerAlertMessage ?? "")
+        }
+        .sheet(item: $calibrationTargetItem) { targetItem in
+            CalibrateKnownStandardSheet(
+                item: targetItem,
+                onSelectTarget: { chosenID in
+                    coordinator.teachCalibratedStandard(from: targetItem, targetID: chosenID)
+                    calibrationTargetItem = nil
+                },
+                onCancel: {
+                    calibrationTargetItem = nil
+                }
+            )
         }
     }
 
@@ -603,7 +616,7 @@ public struct ConsumerScanFlowView: View {
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 20)
 
-                            if item.status != .unclearScan {
+                            if item.status != .unclearScan && item.status != .nonLiquidMaterial {
                                 Button(action: {
                                     withAnimation(.easeInOut(duration: 0.24)) {
                                         activeTuneItem = item
@@ -642,19 +655,38 @@ public struct ConsumerScanFlowView: View {
                                 .padding(.top, 4)
                             }
 
-                            HStack(spacing: 24) {
+                            VStack(spacing: 10) {
                                 Button(action: {
                                     coordinator.resetToAim()
                                 }) {
                                     Label(
-                                        item.status == .unclearScan ? "Try Scan Again" : "Scan Another Liquid",
+                                        (item.status == .unclearScan || item.status == .nonLiquidMaterial)
+                                            ? "Aim at a Liquid & Scan Again"
+                                            : "Scan Another Liquid",
                                         systemImage: "camera.viewfinder"
                                     )
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
-                                    .padding(.vertical, 8)
+                                    .padding(.vertical, 6)
                                 }
                                 .buttonStyle(.plain)
+
+                                if item.measuredFeatures != nil && item.status != .unclearScan {
+                                    Button(action: {
+                                        calibrationTargetItem = item
+                                    }) {
+                                        Label("Calibrate Known Standard", systemImage: "scope")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(Color(red: 0.36, green: 0.42, blue: 0.54))
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 6)
+                                            .background(
+                                                Capsule(style: .continuous)
+                                                    .fill(Color(red: 0.93, green: 0.95, blue: 0.98))
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                             .padding(.bottom, 16)
                         }
@@ -730,6 +762,8 @@ public struct ConsumerScanFlowView: View {
             return "Result"
         case .unmatchedSignature:
             return "Acoustic Profile"
+        case .nonLiquidMaterial:
+            return "Non-Liquid Surface"
         case .unclearScan:
             return "Scan Unclear"
         }
@@ -741,6 +775,8 @@ public struct ConsumerScanFlowView: View {
             return "checkmark.circle.fill"
         case .unmatchedSignature:
             return "waveform.circle.fill"
+        case .nonLiquidMaterial:
+            return "cube.fill"
         case .unclearScan:
             return "exclamationmark.circle.fill"
         }
@@ -760,12 +796,88 @@ public struct ConsumerScanFlowView: View {
                 startPoint: .leading,
                 endPoint: .trailing
             )
+        case .nonLiquidMaterial:
+            return LinearGradient(
+                colors: [Color(red: 0.32, green: 0.39, blue: 0.50), Color(red: 0.55, green: 0.38, blue: 0.22)],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
         case .unclearScan:
             return LinearGradient(
                 colors: [LiquidAnalyzerPalette.compositionOrange, Color(red: 0.85, green: 0.32, blue: 0.12)],
                 startPoint: .leading,
                 endPoint: .trailing
             )
+        }
+    }
+}
+
+/// Simple consumer calibration sheet allowing one-tap teaching of known liquids or solid surfaces
+/// for calibrated indirect acoustic inference and blind testing.
+private struct CalibrateKnownStandardSheet: View {
+    let item: ConsumerScanItem
+    let onSelectTarget: (String) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Save this scan's acoustic echo signature as a known standard on your iPhone. Future scans—including blind tests in opaque mugs or bowls—will compare against your calibrated standards.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Known Liquids") {
+                    ForEach(ReferenceLiquidProfile.provisionalLibrary) { profile in
+                        Button {
+                            onSelectTarget(profile.id)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(profile.displayName)
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    Text(profile.formulaDisplay)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "waveform.badge.plus")
+                                    .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                            }
+                        }
+                    }
+                }
+
+                Section("Non-Liquid Reference") {
+                    Button {
+                        onSelectTarget(CalibratedAcousticPrototype.solidSurfaceTargetID)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Solid / Non-Liquid Material")
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text("Wall, desk, countertop, or empty surface")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "cube.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Calibrate Standard")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        onCancel()
+                    }
+                }
+            }
         }
     }
 }

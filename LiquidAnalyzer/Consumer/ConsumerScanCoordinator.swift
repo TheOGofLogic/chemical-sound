@@ -54,6 +54,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
     @Published public private(set) var scanProgress: Double = 0.0
     @Published public var consumerAlertMessage: String?
     @Published public private(set) var history: [ConsumerScanItem] = []
+    @Published public private(set) var calibratedPrototypes: [CalibratedAcousticPrototype] = []
     @Published public var autoPlayTunePreview: Bool = true
     @Published public var autoScanWhenSteady: Bool = true
     @Published public var hapticsEnabled: Bool = true
@@ -66,6 +67,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
     private let researchCoordinator: AcquisitionCoordinator
     private let classifier: OnDeviceAcousticClassifier
     private let historyStore: ConsumerHistoryStore
+    private let prototypeStore: CalibratedPrototypeStore
     private var activeScanTask: Task<Void, Never>?
     private var consumerScanCounter: Int = 0
 
@@ -74,7 +76,8 @@ public final class ConsumerScanCoordinator: ObservableObject {
         cameraService: CameraTargetingService? = nil,
         tunePlayer: ChemicalTunePlayer? = nil,
         classifier: OnDeviceAcousticClassifier = OnDeviceAcousticClassifier(),
-        historyStore: ConsumerHistoryStore? = nil
+        historyStore: ConsumerHistoryStore? = nil,
+        prototypeStore: CalibratedPrototypeStore? = nil
     ) {
         self.researchCoordinator = researchCoordinator
         let resolvedCam = cameraService ?? CameraTargetingService()
@@ -84,6 +87,9 @@ public final class ConsumerScanCoordinator: ObservableObject {
         let resolvedStore = historyStore ?? ConsumerHistoryStore()
         self.historyStore = resolvedStore
         self.history = resolvedStore.loadAll()
+        let resolvedProtoStore = prototypeStore ?? CalibratedPrototypeStore()
+        self.prototypeStore = resolvedProtoStore
+        self.calibratedPrototypes = resolvedProtoStore.loadAll()
 
         resolvedCam.onAutoTargetLocked = { [weak self] in
             guard let self, self.autoScanWhenSteady, case .aim = self.flowStep else { return }
@@ -115,8 +121,9 @@ public final class ConsumerScanCoordinator: ObservableObject {
         consumerAlertMessage = nil
         triggerLightHaptic()
 
-        // Grab latest silent preview thumbnail synchronously BEFORE transitioning away from AIM
+        // Grab latest silent preview thumbnail + full wide-angle scene frame synchronously BEFORE transitioning away from AIM
         let thumbnailData = cameraService.latestTargetingThumbnail()
+        let sceneContextData = cameraService.latestSceneContextJPEG()
         cameraService.stopCamera()
 
         scanProgress = 0.08
@@ -124,7 +131,10 @@ public final class ConsumerScanCoordinator: ObservableObject {
 
         activeScanTask = Task { [weak self] in
             guard let self else { return }
-            await self.runAutomatedConsumerScan(thumbnailData: thumbnailData)
+            await self.runAutomatedConsumerScan(
+                thumbnailData: thumbnailData,
+                sceneContextData: sceneContextData
+            )
             self.activeScanTask = nil
         }
     }
@@ -163,9 +173,74 @@ public final class ConsumerScanCoordinator: ObservableObject {
         historyStore.saveAll([])
     }
 
+    public func clearCalibratedStandards() {
+        calibratedPrototypes = []
+        prototypeStore.clearAll()
+    }
+
+    /// Saves the measured 11D acoustic scattering vector from a scan as a known empirical standard
+    /// (enabling calibrated indirect acoustic inference for blind testing in clear or opaque containers).
+    public func teachCalibratedStandard(from item: ConsumerScanItem, targetID: String) {
+        guard let features = item.measuredFeatures else { return }
+        let proto = CalibratedAcousticPrototype(targetID: targetID, features: features)
+        prototypeStore.append(proto)
+        calibratedPrototypes = prototypeStore.loadAll()
+        triggerLightHaptic()
+
+        let updatedItem: ConsumerScanItem
+        if targetID == CalibratedAcousticPrototype.solidSurfaceTargetID {
+            updatedItem = ConsumerScanItem(
+                id: item.id,
+                scannedAt: item.scannedAt,
+                status: .nonLiquidMaterial,
+                title: "Solid / Non-Liquid Material",
+                formulaDisplay: "Calibrated Surface Standard",
+                statusBadgeText: "Calibrated Solid Echo Saved",
+                confidencePercent: nil,
+                scientificNote: "Saved as a known solid-surface reflection standard on this iPhone so similar non-liquid echoes are rejected.",
+                constituents: [],
+                tuneProfile: item.tuneProfile,
+                measuredPeakHz: item.measuredPeakHz,
+                measuredCentroidHz: item.measuredCentroidHz,
+                measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+                measuredFeatures: features,
+                thumbnailJPEGData: item.thumbnailJPEGData
+            )
+        } else if let profile = ReferenceLiquidProfile.provisionalLibrary.first(where: { $0.id == targetID }) {
+            updatedItem = ConsumerScanItem(
+                id: item.id,
+                scannedAt: item.scannedAt,
+                status: .referenceMatch,
+                title: profile.displayName,
+                formulaDisplay: profile.formulaDisplay,
+                statusBadgeText: "Calibrated Standard Saved • 95% Similarity",
+                confidencePercent: 95,
+                scientificNote: "Saved to your iPhone's calibrated acoustic library for \(profile.displayName.lowercased()). Future blind scans in this container will match against this empirical acoustic echo signature.",
+                constituents: profile.constituents,
+                tuneProfile: profile.tuneProfile,
+                measuredPeakHz: item.measuredPeakHz,
+                measuredCentroidHz: item.measuredCentroidHz,
+                measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+                measuredFeatures: features,
+                thumbnailJPEGData: item.thumbnailJPEGData
+            )
+            history.removeAll { $0.id == item.id }
+            history.insert(updatedItem, at: 0)
+            if history.count > 50 { history = Array(history.prefix(50)) }
+            historyStore.saveAll(history)
+        } else {
+            return
+        }
+
+        flowStep = .result(updatedItem)
+    }
+
     // MARK: - Automated Layer 2 Research Sequence
 
-    private func runAutomatedConsumerScan(thumbnailData: Data?) async {
+    private func runAutomatedConsumerScan(
+        thumbnailData: Data?,
+        sceneContextData: Data?
+    ) async {
         let protocolConfig = researchCoordinator.protocolConfiguration
         let waveformRepo = researchCoordinator.waveformRepository
         let audioSession = researchCoordinator.audioSession
@@ -267,14 +342,16 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 preRollFrames: preRollFrames,
                 activeFrames: activeFrames,
                 clippingCeilingDBFS: protocolConfig.clippingCeilingDBFS,
-                thumbnailJPEGData: thumbnailData
+                thumbnailJPEGData: thumbnailData,
+                sceneContextJPEGData: sceneContextData,
+                calibratedPrototypes: calibratedPrototypes
             )
 
             try? await timing.sleepMilliseconds(160)
             if Task.isCancelled { return }
             scanProgress = 1.0
 
-            if resultItem.status != .unclearScan {
+            if resultItem.status != .unclearScan && resultItem.status != .nonLiquidMaterial {
                 history.insert(resultItem, at: 0)
                 if history.count > 50 {
                     history = Array(history.prefix(50))
