@@ -1,11 +1,12 @@
 workflows:
   liquid-analyzer-testflight:
-    name: Liquid Analyzer M3B — Signed TestFlight Release (Build 12)
+    name: Liquid Analyzer R2-B — Signed TestFlight Release (v0.4.0 Build 13)
     instance_type: mac_mini_m2
     max_build_duration: 30
     integrations:
       app_store_connect: ChemicalSoundASC
     environment:
+      xcode: "27.2"
       groups:
         - ios_creds
       vars:
@@ -13,6 +14,17 @@ workflows:
         XCODE_PROJECT: "LiquidAnalyzer.xcodeproj"
         XCODE_SCHEME: "LiquidAnalyzer"
     scripts:
+      - name: Record pinned macOS, Xcode & Swift toolchain reproducibility manifest
+        script: |
+          set -euo pipefail
+          {
+            echo "=== LIQUID ANALYZER v0.4.0 (BUILD 13) TOOLCHAIN MANIFEST ==="
+            sw_vers
+            xcodebuild -version
+            xcodebuild -showsdks | grep -E "iphoneos|macosx" || true
+            swift --version
+          } | tee toolchain_manifest.txt
+
       - name: Run controlled Swift XCTest verification gate
         script: |
           set -euo pipefail
@@ -48,6 +60,7 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
+      - toolchain_manifest.txt
       - swift_test_output.txt
 
     publishing:
@@ -56,9 +69,11 @@ workflows:
         submit_to_testflight: false
 
   liquid-analyzer-m3b-macos:
-    name: Liquid Analyzer M3B — macOS XCTest & Unsigned iOS IPA
+    name: Liquid Analyzer R2-B — macOS XCTest & Unsigned iOS IPA (v0.4.0)
     instance_type: mac_mini_m2
     max_build_duration: 30
+    environment:
+      xcode: "27.2"
     scripts:
       - name: Record macOS & Xcode toolchain versions
         script: |
@@ -92,10 +107,10 @@ workflows:
 
           mkdir -p build/ipa_stage/Payload
           cp -R build/DerivedData/Build/Products/Release-iphoneos/LiquidAnalyzer.app build/ipa_stage/Payload/
-          (cd build/ipa_stage && zip -qry ../../LiquidAnalyzer_M3B_v0.2.0.ipa Payload)
-          shasum -a 256 LiquidAnalyzer_M3B_v0.2.0.ipa | tee LiquidAnalyzer_M3B_v0.2.0.ipa.sha256.txt
+          (cd build/ipa_stage && zip -qry ../../LiquidAnalyzer_R2B_v0.4.0.ipa Payload)
+          shasum -a 256 LiquidAnalyzer_R2B_v0.4.0.ipa | tee LiquidAnalyzer_R2B_v0.4.0.ipa.sha256.txt
 
     artifacts:
       - swift_test_output.txt
-      - LiquidAnalyzer_M3B_v0.2.0.ipa
-      - LiquidAnalyzer_M3B_v0.2.0.ipa.sha256.txt
+      - LiquidAnalyzer_R2B_v0.4.0.ipa
+      - LiquidAnalyzer_R2B_v0.4.0.ipa.sha256.txt

@@ -42,7 +42,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
         thumbnailJPEGData: Data? = nil,
         sceneContextJPEGData: Data? = nil,
         opticsLocked: Bool = false,
-        calibratedPrototypes: [CalibratedAcousticPrototype] = []
+        calibratedPrototypes: [CalibratedAcousticPrototype] = [],
+        latePreRollSilence: [Float]? = nil
     ) throws -> ConsumerScanItem {
         let (samples, actualSR) = try Self.readMonoFloatSamplesAndRate(from: recordingURL)
         let inverse = inverseFilterURL.flatMap { try? Self.readMonoFloatSamplesAndRate(from: $0).samples }
@@ -65,7 +66,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
             thumbnailJPEGData: thumbnailJPEGData,
             sceneContextJPEGData: sceneContextJPEGData,
             opticsLocked: opticsLocked,
-            calibratedPrototypes: calibratedPrototypes
+            calibratedPrototypes: calibratedPrototypes,
+            latePreRollSilence: latePreRollSilence
         )
     }
 
@@ -88,7 +90,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
         thumbnailJPEGData: Data? = nil,
         sceneContextJPEGData: Data? = nil,
         opticsLocked: Bool = false,
-        calibratedPrototypes: [CalibratedAcousticPrototype] = []
+        calibratedPrototypes: [CalibratedAcousticPrototype] = [],
+        latePreRollSilence: [Float]? = nil
     ) -> ConsumerScanItem {
         let visual = visualAnalyzer.analyze(jpegData: thumbnailJPEGData, sceneContextJPEGData: sceneContextJPEGData)
         let features = extractFeatures(
@@ -99,8 +102,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
             activeFrames: activeFrames,
             clippingCeilingDBFS: clippingCeilingDBFS,
             visual: visual,
-            opticsLocked: opticsLocked
+            opticsLocked: opticsLocked,
+            latePreRollSilence: latePreRollSilence
         )
+        let (deltaEmpty, deltaWater) = Self.computeBaselineShifts(
+            features: features,
+            geometryCondition: geometryCondition,
+            prototypes: calibratedPrototypes
+        )
+        let baselineMismatch = (deltaEmpty?.compatible == false) || (deltaWater?.compatible == false)
+        let bubbleDetected = Self.detectMicroBubbleScatter(features: features)
         let resolvedOpticsState = aeAfWbLockState ?? (
             visual.hint == .audioOnly ? "HEADLESS" : (opticsLocked ? "LOCKED" : "UNLOCKED_CONTINUOUS")
         )
@@ -205,11 +216,39 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 secondCandidateDistance: allEntries.dropFirst().first?.distance,
                 winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
                 allCandidateDistances: allEntries,
-                thumbnailJPEGData: thumbnailJPEGData
+                thumbnailJPEGData: thumbnailJPEGData,
+                modeAScreeningState: .rejectedSignalQuality,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater
             )
         }
 
-        // 3. Calibrated Indirect Inference (when explicit empirical standards have been saved on-device)
+        if baselineMismatch {
+            let mismatchCode = deltaEmpty?.rejectionCode ?? deltaWater?.rejectionCode ?? "REJECTED_BASELINE_MISMATCH"
+            return buildUnmatchedItem(
+                features: features,
+                scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: "REJECTED_BASELINE_MISMATCH",
+                rejectionReason: mismatchCode,
+                topEntry: allEntries.first,
+                secondEntry: allEntries.dropFirst().first,
+                allEntries: allEntries,
+                thumbnailJPEGData: thumbnailJPEGData,
+                modeAScreeningState: .rejectedBaselineMismatch,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater
+            )
+        }
+
+        // 3. Calibrated Indirect Inference & Differential Baseline Normalization (`Delta X_empty` / `Delta X_water`)
         if !calibratedPrototypes.isEmpty,
            let calibratedResult = matchCalibratedPrototypes(
                features: features,
@@ -225,9 +264,65 @@ public struct OnDeviceAcousticClassifier: Sendable {
                hasOptics: visual.hint != .audioOnly,
                prototypes: calibratedPrototypes,
                allFrozenEntries: allEntries,
-               thumbnailJPEGData: thumbnailJPEGData
+               thumbnailJPEGData: thumbnailJPEGData,
+               deltaEmpty: deltaEmpty,
+               deltaWater: deltaWater,
+               bubbleDetected: bubbleDetected
            ) {
             return calibratedResult
+        }
+
+        // If an EMPTY_CONTAINER baseline is calibrated under matching geometry and shows a clear liquid mass-loading shift
+        // (`|Delta f_i| >= 1.2%`) without matching a specific calibrated class standard, report `LIQUID_LOADED` screening
+        if let de = deltaEmpty, de.compatible {
+            let validShifts = de.relativeFrequencyShifts.compactMap { $0 }.map { abs($0) }
+            if let maxShift = validShifts.max(), maxShift >= 0.012 {
+                let resolvedScreening: ModeAScreeningState = bubbleDetected ? .bubbleScatterDetected : .liquidLoaded
+                let badge = bubbleDetected
+                    ? "MODE_A Screening • Bubble Scatter Detected"
+                    : "MODE_A Screening • Liquid Loaded"
+                let titleText = bubbleDetected ? "Bubble-Active Liquid" : "Liquid Loaded (Unmatched Class)"
+                let noteText = String(
+                    format: "Calibrated container shift detected (max |Δf/f| = %.2f%% vs. Empty Container%@). No uncalibrated molecular or viscosity claim is asserted.",
+                    maxShift * 100.0,
+                    bubbleDetected ? "; micro-bubble high-frequency scatter detected" : ""
+                )
+                return ConsumerScanItem(
+                    scanSequenceNumber: scanSequenceNumber,
+                    batchRunID: batchRunID,
+                    batchScanIndex: batchScanIndex,
+                    batchTotalCount: batchTotalCount,
+                    geometryCondition: geometryCondition,
+                    controlSeriesTag: controlSeriesTag,
+                    aeAfWbLockState: resolvedOpticsState,
+                    targetLockState: resolvedTargetState,
+                    targetLockScore: targetLockScore,
+                    gateDecision: resolvedScreening.rawValue,
+                    rejectionReason: "UNCALIBRATED_CLASS_HELD",
+                    status: .unmatchedSignature,
+                    title: titleText,
+                    formulaDisplay: resolvedScreening.rawValue,
+                    statusBadgeText: badge,
+                    confidencePercent: nil,
+                    scientificNote: noteText,
+                    constituents: [],
+                    tuneProfile: Self.buildAcousticSignatureTune(features: features, formula: "Liquid Loaded"),
+                    measuredPeakHz: features.dominantPeakHz,
+                    measuredCentroidHz: features.spectralCentroidHz,
+                    measuredDecayDBPerSec: features.decaySlopeDBPerSec,
+                    measuredFeatures: features,
+                    topCandidateName: allEntries.first?.displayName,
+                    topCandidateDistance: allEntries.first?.distance,
+                    runnerUpTitle: allEntries.dropFirst().first?.displayName,
+                    secondCandidateDistance: allEntries.dropFirst().first?.distance,
+                    winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
+                    allCandidateDistances: allEntries,
+                    thumbnailJPEGData: thumbnailJPEGData,
+                    modeAScreeningState: resolvedScreening,
+                    deltaEmptyBaseline: deltaEmpty,
+                    deltaWaterBaseline: deltaWater
+                )
+            }
         }
 
         // 4. Layer 2 Acoustic Specular Flat-Surface Guard
@@ -293,6 +388,39 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let margin = secondDistance - best.distance
 
         let isExplicitLabelOrOptics = (scored.count == 1 && visual.hint != .audioOnly && visual.hint != .openVesselAqueousOrGeneral)
+
+        // Phase R2-B (`LA-R2-SPEC-001` Sec. 3.1.4): On real deconvolved airborne MODE_A scans without an explicit optical label
+        // or calibrated container standard, never assert uncalibrated chemical or viscosity identity!
+        // Only physical `BUBBLE_SCATTER_DETECTED` or `NO_VALIDATED_MATCH` (`Unmatched Liquid`) may be emitted.
+        if hasInverseDeconv && !isExplicitLabelOrOptics {
+            let screenState: ModeAScreeningState = bubbleDetected ? .bubbleScatterDetected : .noValidatedMatch
+            let gateCode = bubbleDetected ? "MODE_A_BUBBLE_SCATTER_DETECTED" : "HELD_MODE_A_UNCALIBRATED_SCREENING"
+            let holdReason = bubbleDetected
+                ? "BUBBLE_SCATTER_DETECTED: physical micro-bubble/effervescence scatter observed (non-specific without reference calibration)"
+                : "MODE_A_SCREENING_BOUNDARY: uncalibrated airborne reflection requires container baseline (Delta X_empty / Delta X_water)"
+            return buildUnmatchedItem(
+                features: features,
+                scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: gateCode,
+                rejectionReason: holdReason,
+                topEntry: CandidateScoreEntry(profileID: best.profile.id, displayName: best.profile.displayName, distance: best.distance),
+                secondEntry: secondEntry,
+                allEntries: allEntries,
+                thumbnailJPEGData: thumbnailJPEGData,
+                modeAScreeningState: screenState,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater
+            )
+        }
+
         let effectiveThreshold = isExplicitLabelOrOptics ? 3.10 : distanceThreshold
 
         // STRINGENT AMBIGUITY GATE: Weak match OR close first/second candidates -> UNMATCHED (never force a chemical!)
@@ -341,7 +469,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 topEntry: CandidateScoreEntry(profileID: best.profile.id, displayName: best.profile.displayName, distance: best.distance),
                 secondEntry: secondEntry,
                 allEntries: allEntries,
-                thumbnailJPEGData: thumbnailJPEGData
+                thumbnailJPEGData: thumbnailJPEGData,
+                modeAScreeningState: bubbleDetected ? .bubbleScatterDetected : .noValidatedMatch,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater
             )
         }
 
@@ -381,7 +512,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
             secondCandidateDistance: secondEntry?.distance,
             winningMargin: margin,
             allCandidateDistances: allEntries,
-            thumbnailJPEGData: thumbnailJPEGData
+            thumbnailJPEGData: thumbnailJPEGData,
+            modeAScreeningState: bubbleDetected ? .bubbleScatterDetected : .calibratedClassCandidate,
+            deltaEmptyBaseline: deltaEmpty,
+            deltaWaterBaseline: deltaWater
         )
     }
 
@@ -425,7 +559,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
 
         let dPeak = (a.dominantPeakHz - b.dominantPeakHz) / 460.0
         let dCent = (a.spectralCentroidHz - b.spectralCentroidHz) / 500.0
-        let dDecay = (a.decaySlopeDBPerSec - b.decaySlopeDBPerSec) / 30.0
+        // Scale unclamped Schroeder EDC decay logarithmically so high-rate decays (e.g., 500..6000 dB/s) compare proportionally
+        let dDecay = log(max(20.0, a.decaySlopeDBPerSec) / max(20.0, b.decaySlopeDBPerSec)) / 0.42
         let dScatter = (a.highFreqBubbleScatterDB - b.highFreqBubbleScatterDB) / 3.4
         let dCavity = (a.cavityMultipathDB - b.cavityMultipathDB) / 3.4
         let dEcho = (a.echoReturnDB - b.echoReturnDB) / 4.5
@@ -492,7 +627,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
             opticalCenterBrightness: items.reduce(0.0) { $0 + $1.opticalCenterBrightness } / n,
             opticalInteriorContrast: items.reduce(0.0) { $0 + $1.opticalInteriorContrast } / n,
             opticalRimContrast: items.reduce(0.0) { $0 + $1.opticalRimContrast } / n,
-            opticsLocked: items.allSatisfy(\.opticsLocked)
+            opticsLocked: items.allSatisfy(\.opticsLocked),
+            latePreRollNoiseDBFS: items.reduce(0.0) { $0 + $1.latePreRollNoiseDBFS } / n,
+            preRollExcessHFDB: items.reduce(0.0) { $0 + $1.preRollExcessHFDB } / n,
+            modalVector: first.modalVector
         )
     }
 
@@ -520,7 +658,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
         hasOptics: Bool,
         prototypes: [CalibratedAcousticPrototype],
         allFrozenEntries: [CandidateScoreEntry],
-        thumbnailJPEGData: Data?
+        thumbnailJPEGData: Data?,
+        deltaEmpty: DifferentialBaselineVector? = nil,
+        deltaWater: DifferentialBaselineVector? = nil,
+        bubbleDetected: Bool = false
     ) -> ConsumerScanItem? {
         var grouped: [String: [ExtractedConsumerFeatures]] = [:]
         for proto in prototypes {
@@ -608,7 +749,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 secondCandidateDistance: runnerUpEntry?.distance,
                 winningMargin: margin,
                 allCandidateDistances: calEntries,
-                thumbnailJPEGData: thumbnailJPEGData
+                thumbnailJPEGData: thumbnailJPEGData,
+                modeAScreeningState: .emptyContainer,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater
             )
         }
 
@@ -621,6 +765,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
             note = "Salt signature detected under the calibrated acquisition setup (d = \(String(format: "%.2f", bestTarget.distance)), margin = +\(String(format: "%.2f", margin)))."
         } else if matchedProfile.id == "H2O_DIST" {
             note = "Matches plain water blank under the calibrated setup—no reliable solute shift detected at this sensitivity."
+        } else if matchedProfile.id == "OIL_VEG" {
+            note = "Calibrated container-shift match to Cooking / Vegetable Oil standard (screening candidate; no airborne bulk-viscosity claim)."
         } else {
             note = "\(matchedProfile.displayName) signature detected under the calibrated acquisition setup."
         }
@@ -656,7 +802,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
             secondCandidateDistance: runnerUpEntry?.distance,
             winningMargin: margin,
             allCandidateDistances: calEntries.isEmpty ? allFrozenEntries : calEntries,
-            thumbnailJPEGData: thumbnailJPEGData
+            thumbnailJPEGData: thumbnailJPEGData,
+            modeAScreeningState: bubbleDetected ? .bubbleScatterDetected : .calibratedClassCandidate,
+            deltaEmptyBaseline: deltaEmpty,
+            deltaWaterBaseline: deltaWater
         )
     }
 
@@ -711,7 +860,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
         activeFrames: Int = 9_600,
         clippingCeilingDBFS: Double = -0.5,
         visual: VisualContextSummary = .audioOnlyDefault,
-        opticsLocked: Bool = false
+        opticsLocked: Bool = false,
+        latePreRollSilence: [Float]? = nil
     ) -> ExtractedConsumerFeatures {
         guard !samples.isEmpty else {
             return ExtractedConsumerFeatures(
@@ -741,7 +891,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 opticalCenterBrightness: visual.innerBrightness,
                 opticalInteriorContrast: visual.innerSpatialContrast,
                 opticalRimContrast: visual.rimContrast,
-                opticsLocked: opticsLocked
+                opticsLocked: opticsLocked,
+                latePreRollNoiseDBFS: -120.0,
+                preRollExcessHFDB: 0.0,
+                modalVector: .emptyMasked
             )
         }
 
@@ -782,11 +935,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
         var echoArrivalDelayMs = 2.2
         var persistenceByBin = [Double](repeating: 1.0, count: nFFT / 2)
         var scaledPreFizzScatterTerm = 0.0
+        var latePreRollSliceDouble: [Double] = []
+        var invEnergyGain = 1.0
+        var preRollExcessHFDB = 0.0
+        let isDeconvolvedPath = (inverseFilter != nil && !(inverseFilter?.isEmpty ?? true) && samples.count > max(512, (inverseFilter?.count ?? 0) / 2))
 
-        if let inv = inverseFilter, !inv.isEmpty, samples.count > max(512, inv.count / 2) {
+        if let inv = inverseFilter, isDeconvolvedPath {
             // 1. Convolve full recording with matched ESS inverse filter for exact sample-accurate sync!
             let fullDouble = samples.map { $0.isFinite ? Double($0) : 0.0 }
             let invDouble = inv.map { $0.isFinite ? Double($0) : 0.0 }
+            invEnergyGain = max(1e-12, invDouble.reduce(0.0) { $0 + $1 * $1 })
             let ir = Self.fastLinearConvolve(fullDouble, invDouble)
 
             let expectedPeak = preRollFrames + inv.count - 1
@@ -812,21 +970,34 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 }
             }
 
-            // 2. Recompute pre-roll & active sweep RMS on exact sample-aligned sweep bounds
+            // 2. Recompute pre-roll & active sweep RMS using the clean LATE pre-roll silence window
+            // (eliminating both Sweep-1-to-Sweep-2 early pre-roll bleed and post-tail late-echo contamination)
             let alignedActStart = max(0, min(samples.count - 1, peakIdx - (inv.count - 1)))
             let alignedActEnd = min(samples.count, alignedActStart + max(1, activeFrames))
             alignmentOffsetSamples = alignedActStart - preRollFrames
 
-            // Skip initial 25 ms hardware ADC startup transient and leave 5 ms guard before sweep onset
-            let settleSkip = min(alignedActStart, Int(0.025 * sampleRateHz))
-            let guardSamples = Int(0.005 * sampleRateHz)
-            let alignedPreEnd = max(0, alignedActStart - guardSamples)
-            let alignedPreStart = (alignedPreEnd - settleSkip >= 256) ? settleSkip : 0
+            let lateBounds = WarmBatchAudioEngine.extractLatePreRollSilenceBounds(
+                totalSamples: samples.count,
+                nominalPreRollFrames: preRollFrames,
+                alignedExcitationStart: alignedActStart,
+                sampleRateHz: sampleRateHz
+            )
+            let alignedPreStart = lateBounds.lowerBound
+            let alignedPreEnd = lateBounds.upperBound
 
-            if alignedPreEnd > alignedPreStart + 64 {
+            if let explicitLate = latePreRollSilence, explicitLate.count >= 256 {
+                latePreRollSliceDouble = explicitLate.map { $0.isFinite ? Double($0) : 0.0 }
+                let meanVal = latePreRollSliceDouble.reduce(0.0, +) / Double(latePreRollSliceDouble.count)
+                let varVal = latePreRollSliceDouble.reduce(0.0) { $0 + ($1 - meanVal) * ($1 - meanVal) } / Double(latePreRollSliceDouble.count)
+                preRMS = sqrt(max(0.0, varVal))
+            } else if alignedPreEnd > alignedPreStart + 64 {
                 preRMS = Self.segmentRMS(samples, start: alignedPreStart, end: alignedPreEnd)
                 preEnd = alignedPreEnd
+                latePreRollSliceDouble = Array(samples[alignedPreStart..<alignedPreEnd]).map { $0.isFinite ? Double($0) : 0.0 }
+            } else {
+                latePreRollSliceDouble = Array(samples[0..<preEnd]).map { $0.isFinite ? Double($0) : 0.0 }
             }
+
             if alignedActEnd > alignedActStart + 256 {
                 actRMS = Self.segmentRMS(samples, start: alignedActStart, end: alignedActEnd)
                 actStart = alignedActStart
@@ -837,8 +1008,6 @@ public struct OnDeviceAcousticClassifier: Sendable {
             snrDB = max(0.0, actDB - preDB)
 
             // 3. Causal container reflection gate [t0 + 2.15 ms .. t0 + 15.5 ms]
-            // Rejects internal speaker-port/case Helmholtz ring-down (0..2.1 ms, ~3.7-3.9 kHz) while capturing
-            // both close-range sustained modes and 15-in (2.22 ms) external arrivals before >2.6 m room walls.
             let dirStart = max(0, peakIdx - Int(0.0004 * sampleRateHz))
             let dirEnd = min(ir.count, peakIdx + Int(0.0011 * sampleRateHz))
             let tailStart = min(ir.count, peakIdx + Int(0.00215 * sampleRateHz))
@@ -869,43 +1038,15 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 echoMean = ir[tailStart..<tailEnd].reduce(1e-15) { $0 + $1 * $1 } / Double(tailEnd - tailStart)
             }
 
-            // 4. Empirical deconvolved noise spectrum from quiet post-tail region [t0 + 42 ms .. t0 + 68 ms]
-            // Removes Farina ESS inverse-filter +3 dB/octave high-frequency noise tilt without frequency bias!
-            let floorStart = min(ir.count, peakIdx + Int(0.0420 * sampleRateHz))
-            let floorEnd = min(ir.count, peakIdx + Int(0.0680 * sampleRateHz))
-            var noisePowerSpec = [Double](repeating: 0.0, count: nFFT / 2)
-            if floorEnd - floorStart >= 256 {
-                let floorSlice = Array(ir[floorStart..<floorEnd])
-                let fLen = min(floorSlice.count, nFFT)
-                let floorSum = floorSlice[0..<fLen].reduce(0.0) { $0 + $1 * $1 }
-                noiseFloorPowerPerSample = floorSum / Double(fLen)
-
-                var nr = [Double](repeating: 0.0, count: nFFT)
-                var ni = [Double](repeating: 0.0, count: nFFT)
-                var wNormNoise = 0.0
-                for i in 0..<fLen {
-                    let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(i) / Double(max(1, fLen - 1))))
-                    nr[i] = floorSlice[i] * w
-                    wNormNoise += w * w
-                }
-                Self.fftRadix2(real: &nr, imag: &ni, inverse: false)
-                var rawNP = [Double](repeating: 0.0, count: nFFT / 2)
-                let invWNorm = 1.0 / max(1e-9, wNormNoise)
-                for b in 0..<(nFFT / 2) {
-                    rawNP[b] = (nr[b] * nr[b] + ni[b] * ni[b]) * invWNorm
-                }
-                for b in 1..<(nFFT / 2 - 1) {
-                    var s = 0.0
-                    var c = 0.0
-                    let kLo = max(1, b - 6)
-                    let kHi = min(nFFT / 2 - 1, b + 6)
-                    for k in kLo...kHi {
-                        s += rawNP[k]
-                        c += 1.0
-                    }
-                    noisePowerSpec[b] = c > 0 ? (s / c) : rawNP[b]
-                }
-            }
+            // 4. Phase R2-B Relocated Deconvolved Noise Spectrum from Late Pre-Roll Silence Buffer!
+            // Uses exact LTI Parseval transfer `N_deconv(b) = P_latePreRoll(b) * |G_inv(b)|^2` so late-tail
+            // container echoes (42..68 ms) and Farina harmonic pre-impulses never contaminate baseline noise.
+            noiseFloorPowerPerSample = max(1e-24, preRMS * preRMS * invEnergyGain)
+            let noisePowerSpec = Self.computeDeconvolvedPreRollNoiseSpectrum(
+                latePreRollSlice: latePreRollSliceDouble,
+                invDouble: invDouble,
+                nFFT: nFFT
+            )
 
             let rawTailSNR = 10.0 * log10(max(echoMean, 1e-18) / max(noiseFloorPowerPerSample, 1e-18))
             tailSNRDB = max(-10.0, min(60.0, rawTailSNR))
@@ -1012,11 +1153,13 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 }
             }
 
-            // Scale settled pre-roll excess micro-bubble fizz into the deconvolved ir gain domain
-            if alignedPreEnd > alignedPreStart + 512 {
-                let settledPre = Array(samples[alignedPreStart..<alignedPreEnd]).map { $0.isFinite ? Double($0) : 0.0 }
-                let preHF = Self.bandPower(slice: settledPre, sampleRateHz: sampleRateHz, lowHz: 5_200.0, highHz: 11_800.0)
-                let preMid = Self.bandPower(slice: settledPre, sampleRateHz: sampleRateHz, lowHz: 1_500.0, highHz: 4_200.0)
+            // Scale settled LATE pre-roll excess micro-bubble fizz into the deconvolved ir gain domain
+            if latePreRollSliceDouble.count >= 512 {
+                let preHF = Self.bandPower(slice: latePreRollSliceDouble, sampleRateHz: sampleRateHz, lowHz: 5_200.0, highHz: 11_800.0)
+                let preMid = Self.bandPower(slice: latePreRollSliceDouble, sampleRateHz: sampleRateHz, lowHz: 1_500.0, highHz: 4_200.0)
+                if preMid > 1e-24 && preHF > 1e-24 {
+                    preRollExcessHFDB = 10.0 * log10(preHF / (0.85 * preMid))
+                }
                 let excessFizz = max(0.0, preHF - 0.85 * preMid)
                 let deconvGainRatio = netEchoMean / max(actRMS * actRMS, 1e-12)
                 scaledPreFizzScatterTerm = 6.0 * excessFizz * Double(nFFT) * deconvGainRatio * windowPowerScale
@@ -1024,12 +1167,30 @@ public struct OnDeviceAcousticClassifier: Sendable {
         } else {
             // Direct active-window analysis path (headless unit tests & non-deconvolved fallback)
             analysisSignal = Array(samples[actStart..<max(actStart + 1, actEnd)]).map { $0.isFinite ? Double($0) : 0.0 }
+            let lateBounds = WarmBatchAudioEngine.extractLatePreRollSilenceBounds(
+                totalSamples: samples.count,
+                nominalPreRollFrames: preEnd,
+                alignedExcitationStart: preEnd,
+                sampleRateHz: sampleRateHz
+            )
+            latePreRollSliceDouble = (!lateBounds.isEmpty && lateBounds.upperBound <= samples.count)
+                ? Array(samples[lateBounds]).map { $0.isFinite ? Double($0) : 0.0 }
+                : Array(samples[0..<preEnd]).map { $0.isFinite ? Double($0) : 0.0 }
             let preFizzHighPower = Self.bandPower(
-                slice: Array(samples[0..<preEnd]).map { $0.isFinite ? Double($0) : 0.0 },
+                slice: latePreRollSliceDouble,
                 sampleRateHz: sampleRateHz,
                 lowHz: 5_200.0,
                 highHz: 11_800.0
             )
+            let preFizzMidPower = Self.bandPower(
+                slice: latePreRollSliceDouble,
+                sampleRateHz: sampleRateHz,
+                lowHz: 1_500.0,
+                highHz: 4_200.0
+            )
+            if preFizzHighPower > 1e-24 {
+                preRollExcessHFDB = 10.0 * log10(preFizzHighPower / max(1e-20, 0.85 * preFizzMidPower))
+            }
             scaledPreFizzScatterTerm = 6.0 * preFizzHighPower * Double(nFFT)
 
             var real = [Double](repeating: 0.0, count: nFFT)
@@ -1184,19 +1345,29 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let spectralFlatness = min(1.0, max(0.0, geoMeanPower / max(meanBinPower, 1e-18)))
         let peakProminenceDB = max(0.0, 10.0 * log10(maxBinPower / max(meanBinPower, 1e-18)))
 
-        let half = analysisSignal.count / 2
-        let decayDBPerSec: Double
-        if half >= 64 {
-            let rawEarly = analysisSignal[0..<half].reduce(1e-15) { $0 + $1 * $1 } / Double(half)
-            let rawLate = analysisSignal[half..<analysisSignal.count].reduce(1e-15) { $0 + $1 * $1 } / Double(analysisSignal.count - half)
-            let earlyE = max(1e-14, rawEarly - 0.85 * noiseFloorPowerPerSample)
-            let lateE = max(1e-14, rawLate - 0.85 * noiseFloorPowerPerSample)
-            let dropDB = min(7.2, max(1.0, 10.0 * log10(earlyE / max(lateE, earlyE * 0.16))))
-            let dtSec = max(0.045, Double(half) / sampleRateHz)
-            decayDBPerSec = min(145.0, max(50.0, dropDB / dtSec))
-        } else {
-            decayDBPerSec = 80.0
-        }
+        // Phase R2-B: Remove hardcoded 145.0 dB/s clamp ceiling and compute Chu-compensated Narrowband Schroeder EDC
+        // together with the 4-Mode Vector (`ModalVector4`, `mask_i = 0, f_i = NaN` when absent).
+        let modalVector = Self.extractModalVector4(
+            analysisSignal: analysisSignal,
+            latePreRollSlice: latePreRollSliceDouble,
+            inverseFilter: inverseFilter,
+            invEnergyGain: invEnergyGain,
+            sampleRateHz: sampleRateHz,
+            latePreRollDBFS: preDB,
+            isDeconvolvedTail: isDeconvolvedPath
+        )
+
+        let primaryEdc = Self.estimateSchroederEDCDecay(
+            signal: analysisSignal,
+            modeFreqHz: primaryPeakHz,
+            latePreRollSlice: latePreRollSliceDouble,
+            invEnergyGain: isDeconvolvedPath ? invEnergyGain : 1.0,
+            sampleRateHz: sampleRateHz,
+            isDeconvolvedTail: isDeconvolvedPath
+        )
+        let decayDBPerSec = primaryEdc.decayDBPerSec
+            ?? modalVector.decayDBPerSec.compactMap({ $0 }).first
+            ?? 80.0
 
         let canonicalVector = String(
             format: "%.1f|%.1f|%.2f|%.1f|%.2f|%.2f|%@",
@@ -1238,7 +1409,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
             opticalCenterBrightness: visual.innerBrightness,
             opticalInteriorContrast: visual.innerSpatialContrast,
             opticalRimContrast: visual.rimContrast,
-            opticsLocked: opticsLocked
+            opticsLocked: opticsLocked,
+            latePreRollNoiseDBFS: preDB,
+            preRollExcessHFDB: preRollExcessHFDB,
+            modalVector: modalVector
         )
     }
 
@@ -1256,7 +1430,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
         gateDecision: String = "REJECTED_NON_LIQUID_SURFACE",
         rejectionReason: String = "NON_LIQUID_SURFACE",
         allEntries: [CandidateScoreEntry],
-        thumbnailJPEGData: Data?
+        thumbnailJPEGData: Data?,
+        modeAScreeningState: ModeAScreeningState = .nonstandardSurfaceResponse,
+        deltaEmptyBaseline: DifferentialBaselineVector? = nil,
+        deltaWaterBaseline: DifferentialBaselineVector? = nil
     ) -> ConsumerScanItem {
         let top = allEntries.first
         let second = allEntries.dropFirst().first
@@ -1290,7 +1467,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
             secondCandidateDistance: second?.distance,
             winningMargin: (top != nil && second != nil) ? (second!.distance - top!.distance) : nil,
             allCandidateDistances: allEntries,
-            thumbnailJPEGData: thumbnailJPEGData
+            thumbnailJPEGData: thumbnailJPEGData,
+            modeAScreeningState: modeAScreeningState,
+            deltaEmptyBaseline: deltaEmptyBaseline,
+            deltaWaterBaseline: deltaWaterBaseline
         )
     }
 
@@ -1310,15 +1490,24 @@ public struct OnDeviceAcousticClassifier: Sendable {
         topEntry: CandidateScoreEntry?,
         secondEntry: CandidateScoreEntry?,
         allEntries: [CandidateScoreEntry],
-        thumbnailJPEGData: Data?
+        thumbnailJPEGData: Data?,
+        modeAScreeningState: ModeAScreeningState = .noValidatedMatch,
+        deltaEmptyBaseline: DifferentialBaselineVector? = nil,
+        deltaWaterBaseline: DifferentialBaselineVector? = nil
     ) -> ConsumerScanItem {
         let margin = (topEntry != nil && secondEntry != nil) ? (secondEntry!.distance - topEntry!.distance) : nil
         let gateSummary: String
-        if let top = topEntry, let m = margin {
-            gateSummary = "Ambiguity Gate R1 held back forced classification (top raw candidate \(top.displayName) d=\(String(format: "%.2f", top.distance)), margin=+\(String(format: "%.2f", m))). Expand 'Repeatability Gate R1 Telemetry' below to inspect all raw measurements."
+        if modeAScreeningState == .bubbleScatterDetected {
+            gateSummary = "MODE_A Screening detected elevated high-frequency micro-bubble / effervescence scatter. Held as Unmatched Liquid because uncalibrated airborne scatter is non-specific without a container baseline."
+        } else if let top = topEntry, let m = margin {
+            gateSummary = "MODE_A Ambiguity Gate held back forced classification (top raw candidate \(top.displayName) d=\(String(format: "%.2f", top.distance)), margin=+\(String(format: "%.2f", m))). Calibrate Empty & Water container baselines for differential shift screening."
         } else {
-            gateSummary = "Measured acoustic echo without forcing an unverified chemical match. Expand 'Repeatability Gate R1 Telemetry' below for full raw measurements."
+            gateSummary = "Measured acoustic echo without forcing an unverified chemical match."
         }
+
+        let badge = (modeAScreeningState == .bubbleScatterDetected)
+            ? "MODE_A Screening • Bubble Scatter Detected"
+            : "Ambiguity Gate R2 • No Forced Match"
 
         return ConsumerScanItem(
             scanSequenceNumber: scanSequenceNumber,
@@ -1335,7 +1524,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
             status: .unmatchedSignature,
             title: "Unmatched Liquid",
             formulaDisplay: "Acoustic Profile",
-            statusBadgeText: "Ambiguity Gate R1 • No Forced Match",
+            statusBadgeText: badge,
             confidencePercent: nil,
             scientificNote: gateSummary,
             constituents: [
@@ -1356,7 +1545,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
             secondCandidateDistance: secondEntry?.distance,
             winningMargin: margin,
             allCandidateDistances: allEntries,
-            thumbnailJPEGData: thumbnailJPEGData
+            thumbnailJPEGData: thumbnailJPEGData,
+            modeAScreeningState: modeAScreeningState,
+            deltaEmptyBaseline: deltaEmptyBaseline,
+            deltaWaterBaseline: deltaWaterBaseline
         )
     }
 
@@ -1378,6 +1570,557 @@ public struct OnDeviceAcousticClassifier: Sendable {
             baseFrequenciesHz: chord,
             shimmerMultiplier: max(0.75, min(1.30, features.spectralCentroidHz / 2_600.0)),
             warmthDecayPerSec: max(1.3, min(2.4, features.decaySlopeDBPerSec / 65.0))
+        )
+    }
+
+    // MARK: - Phase R2-B (`LA-R2-A-SANDBOX-REPORT-001`) Mathematical Estimators & MODE_A Screening
+
+    /// Evaluates physical micro-bubble / effervescence backscatter (`BUBBLE_SCATTER_DETECTED`) using both
+    /// reflected `[5.5-8.5] / [2.0-4.5] kHz` energy and active late-pre-roll high-frequency fizz excess,
+    /// preventing bare empty plastic cups (quiet pre-roll) from false-triggering bubble detection.
+    public static func detectMicroBubbleScatter(features: ExtractedConsumerFeatures) -> Bool {
+        // `highFreqBubbleScatterDB` integrates speaker-compensated reflected [5.2-11.8]/[1.5-4.2] kHz scatter
+        // plus late-pre-roll high-frequency micro-bubble fizz excess, cleanly separating active bubble scatter
+        // from bare empty plastic containers (-9.4 to -10.4 dB) and non-effervescent liquids (<= -5.62 dB).
+        return features.highFreqBubbleScatterDB >= -5.58
+    }
+
+    /// Computes differential shift vectors (`Delta X_empty`, `Delta X_water`) against saved baseline prototypes.
+    public static func computeBaselineShifts(
+        features: ExtractedConsumerFeatures,
+        geometryCondition: String?,
+        prototypes: [CalibratedAcousticPrototype]
+    ) -> (deltaEmpty: DifferentialBaselineVector?, deltaWater: DifferentialBaselineVector?) {
+        guard let sampleMV = features.modalVector else { return (nil, nil) }
+
+        let emptyProtos = prototypes.filter { $0.targetID == CalibratedAcousticPrototype.emptyContainerTargetID }
+        let waterProtos = prototypes.filter { $0.targetID == "H2O_DIST" }
+
+        let dEmpty: DifferentialBaselineVector? = {
+            guard !emptyProtos.isEmpty else { return nil }
+            let refMV = aggregatePrototypeModalVector(emptyProtos)
+            return DifferentialBaselineVector.compute(
+                sample: sampleMV,
+                sampleGeometry: geometryCondition,
+                reference: refMV,
+                referenceTargetID: CalibratedAcousticPrototype.emptyContainerTargetID,
+                referenceGeometry: geometryCondition
+            )
+        }()
+
+        let dWater: DifferentialBaselineVector? = {
+            guard !waterProtos.isEmpty else { return nil }
+            let refMV = aggregatePrototypeModalVector(waterProtos)
+            return DifferentialBaselineVector.compute(
+                sample: sampleMV,
+                sampleGeometry: geometryCondition,
+                reference: refMV,
+                referenceTargetID: "H2O_DIST",
+                referenceGeometry: geometryCondition
+            )
+        }()
+
+        return (dEmpty, dWater)
+    }
+
+    private static func aggregatePrototypeModalVector(_ protos: [CalibratedAcousticPrototype]) -> ModalVector4 {
+        if protos.count == 1, let mv = protos[0].features.modalVector {
+            return mv
+        }
+        var sweeps: [(sweepIdx: Int, modes: [BatchModalVectorTracker.SweepModeObservation])] = []
+        var slopes: [Double] = []
+        var scatters: [Double] = []
+        var preRolls: [Double] = []
+        for (idx, p) in protos.enumerated() {
+            preRolls.append(p.features.latePreRollNoiseDBFS)
+            if let mv = p.features.modalVector {
+                if let s = mv.spectralAttenuationSlopeDBPerKHz, s.isFinite { slopes.append(s) }
+                if let sc = mv.bubbleScatter55to85DB, sc.isFinite { scatters.append(sc) }
+                var obs: [BatchModalVectorTracker.SweepModeObservation] = []
+                for k in 0..<4 where mv.validityMask[k] == 1 {
+                    if let f = mv.frequenciesHz[k], f.isFinite {
+                        obs.append(
+                            BatchModalVectorTracker.SweepModeObservation(
+                                freqHz: f,
+                                ampDB: p.features.primaryPeakAmplitudeDB,
+                                qFactor: mv.qValidityMask[k] == 1 ? mv.qualityFactorsQ[k] : nil,
+                                alphaPerSec: mv.decayValidityMask[k] == 1 ? mv.decayAlphaPerSec[k] : nil,
+                                alphaDBPerSec: mv.decayValidityMask[k] == 1 ? mv.decayDBPerSec[k] : nil,
+                                alphaRSquared: mv.decayValidityMask[k] == 1 ? mv.decayRSquared[k] : nil
+                            )
+                        )
+                    }
+                }
+                sweeps.append((idx + 1, obs))
+            } else {
+                var obs = [BatchModalVectorTracker.SweepModeObservation(freqHz: p.features.dominantPeakHz, ampDB: p.features.primaryPeakAmplitudeDB)]
+                for sf in p.features.secondaryPeaksHz where sf > 0 {
+                    obs.append(BatchModalVectorTracker.SweepModeObservation(freqHz: sf, ampDB: p.features.primaryPeakAmplitudeDB - 3.0))
+                }
+                sweeps.append((idx + 1, obs))
+            }
+        }
+        let medSlope = slopes.isEmpty ? nil : slopes.sorted()[slopes.count / 2]
+        let medScat = scatters.isEmpty ? nil : scatters.sorted()[scatters.count / 2]
+        let medPre = preRolls.isEmpty ? -82.0 : preRolls.sorted()[preRolls.count / 2]
+        return BatchModalVectorTracker.trackSweeps(
+            sweeps: sweeps,
+            persistenceFraction: 0.50,
+            medianSlope: medSlope,
+            medianScatter: medScat,
+            medianLatePreRoll: medPre
+        )
+    }
+
+    /// Computes deconvolved noise power per bin strictly from the late pre-roll silence buffer:
+    /// `N_deconv(b) = P_latePreRoll(b) * |G_inv(b)|^2`, avoiding both early Sweep-1 bleed and post-tail echoes.
+    public static func computeDeconvolvedPreRollNoiseSpectrum(
+        latePreRollSlice: [Double],
+        invDouble: [Double],
+        nFFT: Int
+    ) -> [Double] {
+        let halfBins = nFFT / 2
+        guard latePreRollSlice.count >= 128, !invDouble.isEmpty else {
+            return [Double](repeating: 0.0, count: halfBins)
+        }
+        let fLen = min(latePreRollSlice.count, nFFT)
+        var nr = [Double](repeating: 0.0, count: nFFT)
+        var ni = [Double](repeating: 0.0, count: nFFT)
+        var wNormNoise = 0.0
+        for i in 0..<fLen {
+            let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(i) / Double(max(1, fLen - 1))))
+            nr[i] = latePreRollSlice[i] * w
+            wNormNoise += w * w
+        }
+        fftRadix2(real: &nr, imag: &ni, inverse: false)
+
+        // Evaluate inverse-filter transfer power |G_inv|^2 on a power-of-2 grid >= max(nFFT, invDouble.count)
+        var invFftLen = max(nFFT, 1)
+        while invFftLen < invDouble.count { invFftLen <<= 1 }
+        var gr = [Double](repeating: 0.0, count: invFftLen)
+        var gi = [Double](repeating: 0.0, count: invFftLen)
+        for i in 0..<invDouble.count { gr[i] = invDouble[i] }
+        fftRadix2(real: &gr, imag: &gi, inverse: false)
+        let ratio = invFftLen / nFFT
+
+        var rawNP = [Double](repeating: 0.0, count: halfBins)
+        let invWNorm = 1.0 / max(1e-9, wNormNoise)
+        for b in 0..<halfBins {
+            let pPre = (nr[b] * nr[b] + ni[b] * ni[b]) * invWNorm
+            let gIdx = min(invFftLen / 2, b * ratio)
+            let gMag2 = gr[gIdx] * gr[gIdx] + gi[gIdx] * gi[gIdx]
+            rawNP[b] = pPre * gMag2
+        }
+
+        var smoothed = [Double](repeating: 0.0, count: halfBins)
+        for b in 1..<(halfBins - 1) {
+            var s = 0.0
+            var c = 0.0
+            let kLo = max(1, b - 6)
+            let kHi = min(halfBins - 1, b + 6)
+            for k in kLo...kHi {
+                s += rawNP[k]
+                c += 1.0
+            }
+            smoothed[b] = c > 0 ? (s / c) : rawNP[b]
+        }
+        return smoothed
+    }
+
+    /// Chu-compensated Narrowband Schroeder Energy Decay Curve (EDC) estimator (`LA-R2-A-SANDBOX-REPORT-001` Sec. 5.1).
+    /// Removes the legacy 145.0 dB/s ceiling and integrates narrowband energy backwards to average out cavity multipath beats.
+    public static func estimateSchroederEDCDecay(
+        signal: [Double],
+        modeFreqHz: Double,
+        latePreRollSlice: [Double],
+        invEnergyGain: Double,
+        sampleRateHz: Double,
+        isDeconvolvedTail: Bool
+    ) -> (alphaPerSec: Double?, decayDBPerSec: Double?, rSquared: Double?) {
+        let len = signal.count
+        let firLen = isDeconvolvedTail ? 193 : 257
+        guard len >= max(160, firLen), modeFreqHz > 200.0 else {
+            return (nil, nil, nil)
+        }
+        let halfFir = (firLen - 1) / 2
+        var hBp = [Double](repeating: 0.0, count: firLen)
+        var norm = 0.0
+        for k in 0..<firLen {
+            let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(k) / Double(firLen - 1)))
+            let v = w * cos(2.0 * Double.pi * modeFreqHz * Double(k - halfFir) / sampleRateHz)
+            hBp[k] = v
+            norm += v * v
+        }
+        let invNorm = 1.0 / sqrt(max(1e-30, norm))
+        for k in 0..<firLen { hBp[k] *= invNorm }
+
+        // Chu (1978) narrowband baseline noise variance from late pre-roll silence slice
+        var noiseSqSum = 0.0
+        var noiseCnt = 0
+        if latePreRollSlice.count > firLen {
+            var idx = halfFir
+            while idx + halfFir < latePreRollSlice.count {
+                var acc = 0.0
+                for k in 0..<firLen {
+                    acc += latePreRollSlice[idx - halfFir + k] * hBp[k]
+                }
+                noiseSqSum += acc * acc
+                noiseCnt += 1
+                idx += 12
+            }
+        }
+        let meanNoiseSq = (noiseCnt > 0 ? (noiseSqSum / Double(noiseCnt)) : 0.0) * max(1.0, invEnergyGain)
+
+        var bpSq = [Double](repeating: 0.0, count: len)
+        for n in 0..<len {
+            var acc = 0.0
+            for k in 0..<firLen {
+                let sIdx = n - halfFir + k
+                if sIdx >= 0 && sIdx < len {
+                    acc += signal[sIdx] * hBp[k]
+                }
+            }
+            bpSq[n] = max(0.0, acc * acc - meanNoiseSq)
+        }
+
+        var edc = [Double](repeating: 0.0, count: len)
+        edc[len - 1] = bpSq[len - 1]
+        if len >= 2 {
+            for n in stride(from: len - 2, through: 0, by: -1) {
+                edc[n] = edc[n + 1] + bpSq[n]
+            }
+        }
+        guard edc[0] > 1e-30 else { return (nil, nil, nil) }
+
+        let fitStart = isDeconvolvedTail ? Int(0.0005 * sampleRateHz) : Int(0.005 * sampleRateHz)
+        let fitEnd = isDeconvolvedTail
+            ? min(len - 8, Int(0.0095 * sampleRateHz))
+            : min(len - 32, Int(0.080 * sampleRateHz))
+        let step = isDeconvolvedTail ? 16 : 48
+        guard fitEnd > fitStart + step * 4 else { return (nil, nil, nil) }
+
+        var ts: [Double] = []
+        var ys: [Double] = []
+        var n = fitStart
+        while n < fitEnd {
+            if edc[n] <= 0.01 * edc[0] { break }
+            ts.append(Double(n) / sampleRateHz)
+            ys.append(0.5 * log(edc[n] / edc[0]))
+            n += step
+        }
+        guard ts.count >= 5 else { return (nil, nil, nil) }
+
+        let countD = Double(ts.count)
+        let mt = ts.reduce(0.0, +) / countD
+        let my = ys.reduce(0.0, +) / countD
+        var sxx = 0.0
+        var sxy = 0.0
+        for i in 0..<ts.count {
+            let dt = ts[i] - mt
+            sxx += dt * dt
+            sxy += dt * (ys[i] - my)
+        }
+        guard sxx > 1e-24 else { return (nil, nil, nil) }
+        let slope = sxy / sxx
+        let b0 = my - slope * mt
+        var ssr = 0.0
+        var sst = 0.0
+        for i in 0..<ts.count {
+            let pred = b0 + slope * ts[i]
+            let r = ys[i] - pred
+            let d = ys[i] - my
+            ssr += r * r
+            sst += d * d
+        }
+        let alpha = -slope
+        guard alpha.isFinite && alpha > 0.0 else { return (nil, nil, nil) }
+        let r2 = sst > 1e-18 ? max(0.0, 1.0 - ssr / sst) : 0.0
+        let dbPerSec = (20.0 / log(10.0)) * alpha
+        return (alpha, dbPerSec, r2)
+    }
+
+    /// Extracts the Phase R2-B 4-Mode Vector (`ModalVector4`) with 3-point log-magnitude parabolic `E1` interpolation,
+    /// monotonic `-3 dB` spectral `Q_i` (rejecting mode overlaps without clamping), Chu-compensated Schroeder EDC `alpha_i`,
+    /// ESS-normalized modal-excluded `S_att`, `[5.5-8.5]/[2.0-4.5] kHz` bubble scatter, and `mask_i = 0, f_i = NaN` for absent modes.
+    public static func extractModalVector4(
+        analysisSignal: [Double],
+        latePreRollSlice: [Double],
+        inverseFilter: [Float]?,
+        invEnergyGain: Double,
+        sampleRateHz: Double,
+        latePreRollDBFS: Double,
+        isDeconvolvedTail: Bool
+    ) -> ModalVector4 {
+        let nFFT = 8_192
+        let halfBins = nFFT / 2
+        let copyLen = min(analysisSignal.count, nFFT)
+        guard copyLen >= 128 else {
+            return ModalVector4(
+                frequenciesHz: [nil, nil, nil, nil],
+                validityMask: [0, 0, 0, 0],
+                qualityFactorsQ: [nil, nil, nil, nil],
+                qValidityMask: [0, 0, 0, 0],
+                decayAlphaPerSec: [nil, nil, nil, nil],
+                decayDBPerSec: [nil, nil, nil, nil],
+                decayRSquared: [nil, nil, nil, nil],
+                decayValidityMask: [0, 0, 0, 0],
+                spectralAttenuationSlopeDBPerKHz: nil,
+                bubbleScatter55to85DB: nil,
+                latePreRollNoiseDBFS: latePreRollDBFS
+            )
+        }
+
+        var re = [Double](repeating: 0.0, count: nFFT)
+        var im = [Double](repeating: 0.0, count: nFFT)
+        var wNorm = 0.0
+        for i in 0..<copyLen {
+            let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(i) / Double(max(1, copyLen - 1))))
+            re[i] = analysisSignal[i] * w
+            wNorm += w * w
+        }
+        fftRadix2(real: &re, imag: &im, inverse: false)
+        let invWNorm = 1.0 / max(1e-9, wNorm)
+        var power = [Double](repeating: 0.0, count: halfBins)
+        for b in 0..<halfBins {
+            power[b] = (re[b] * re[b] + im[b] * im[b]) * invWNorm
+        }
+
+        let invDouble = inverseFilter?.map { $0.isFinite ? Double($0) : 0.0 } ?? []
+        let noiseSpec: [Double]
+        if isDeconvolvedTail && !invDouble.isEmpty {
+            noiseSpec = computeDeconvolvedPreRollNoiseSpectrum(
+                latePreRollSlice: latePreRollSlice,
+                invDouble: invDouble,
+                nFFT: nFFT
+            )
+        } else {
+            var np = [Double](repeating: 0.0, count: halfBins)
+            if latePreRollSlice.count >= 128 {
+                let fLen = min(latePreRollSlice.count, nFFT)
+                var nr = [Double](repeating: 0.0, count: nFFT)
+                var ni = [Double](repeating: 0.0, count: nFFT)
+                var wn = 0.0
+                for i in 0..<fLen {
+                    let w = 0.5 * (1.0 - cos(2.0 * Double.pi * Double(i) / Double(max(1, fLen - 1))))
+                    nr[i] = latePreRollSlice[i] * w
+                    wn += w * w
+                }
+                fftRadix2(real: &nr, imag: &ni, inverse: false)
+                for b in 0..<halfBins {
+                    np[b] = (nr[b] * nr[b] + ni[b] * ni[b]) / max(1e-9, wn)
+                }
+            }
+            noiseSpec = np
+        }
+
+        let df = sampleRateHz / Double(nFFT)
+        let mainlobeWidthHz = 1.44 * (sampleRateHz / Double(copyLen)) // Hann -3 dB mainlobe width
+        let kMin = max(2, Int(ceil(1_100.0 / df)))
+        let kMax = min(halfBins - 3, Int(floor(5_500.0 / df)))
+        let flankBins = max(3, Int(round(250.0 / df)))
+        let minSepBins = max(2, Int(round(75.0 / df)))
+
+        struct RawModeCand {
+            let bin: Int
+            let fE1Hz: Double
+            let peakPower: Double
+            let prominenceDB: Double
+            let localSnrDB: Double
+        }
+
+        var rawPeaks: [RawModeCand] = []
+        if kMax > kMin {
+            for k in kMin...kMax {
+                if power[k] > power[k - 1] && power[k] >= power[k + 1] && power[k] > 1e-24 {
+                    var minL = power[k]
+                    var minR = power[k]
+                    for j in max(1, k - flankBins)..<k { if power[j] < minL { minL = power[j] } }
+                    for j in (k + 1)...min(halfBins - 2, k + flankBins) { if power[j] < minR { minR = power[j] } }
+                    let refTrough = max(minL, minR, 1e-30)
+                    let promDB = 10.0 * log10(power[k] / refTrough)
+                    if promDB < 3.0 { continue }
+
+                    let lnL = 0.5 * log(max(power[k - 1], 1e-36))
+                    let ln0 = 0.5 * log(max(power[k], 1e-36))
+                    let lnR = 0.5 * log(max(power[k + 1], 1e-36))
+                    let denom = lnL - 2.0 * ln0 + lnR
+                    if !denom.isFinite || abs(denom) <= 1e-9 { continue }
+                    let delta = max(-0.5, min(0.5, 0.5 * (lnL - lnR) / denom))
+                    let lnPeak = ln0 - 0.25 * (lnL - lnR) * delta
+                    let pkPow = exp(2.0 * lnPeak)
+                    let locNoise = max(noiseSpec[k], 1e-30)
+                    let locSnrDB = 10.0 * log10(max(1e-6, pkPow / locNoise))
+                    if locSnrDB < 6.0 { continue }
+
+                    rawPeaks.append(
+                        RawModeCand(
+                            bin: k,
+                            fE1Hz: (Double(k) + delta) * df,
+                            peakPower: pkPow,
+                            prominenceDB: promDB,
+                            localSnrDB: locSnrDB
+                        )
+                    )
+                }
+            }
+        }
+
+        rawPeaks.sort { $0.peakPower > $1.peakPower }
+        var selected: [RawModeCand] = []
+        for p in rawPeaks {
+            if selected.contains(where: { abs($0.bin - p.bin) < minSepBins }) { continue }
+            selected.append(p)
+            if selected.count >= 4 { break }
+        }
+        // Order physical modes by ascending frequency within the sweep; if < 4 modes exist, remaining slots stay nil/NaN
+        selected.sort { $0.fE1Hz < $1.fE1Hz }
+
+        var fOut: [Double?] = [nil, nil, nil, nil]
+        var fMask: [Int] = [0, 0, 0, 0]
+        var qOut: [Double?] = [nil, nil, nil, nil]
+        var qMask: [Int] = [0, 0, 0, 0]
+        var aOut: [Double?] = [nil, nil, nil, nil]
+        var aDBOut: [Double?] = [nil, nil, nil, nil]
+        var aR2Out: [Double?] = [nil, nil, nil, nil]
+        var aMask: [Int] = [0, 0, 0, 0]
+        var detectedExclusions: [(centerHz: Double, halfWidthHz: Double)] = []
+
+        for (slot, cand) in selected.enumerated() where slot < 4 {
+            fOut[slot] = cand.fE1Hz
+            fMask[slot] = 1
+
+            // Monotonic -3 dB spectral Q_i (never clamped; rejects intervening saddle overlap as nil)
+            let k0 = cand.bin
+            let cleanPeak = max(0.0, cand.peakPower - noiseSpec[k0])
+            let halfTarget = 0.5 * cleanPeak
+            var bwHz: Double?
+            if cleanPeak > 0 && cand.localSnrDB >= 10.0 {
+                let qMinBin = max(1, Int(floor(600.0 / df)))
+                let qMaxBin = min(halfBins - 2, Int(ceil(12_000.0 / df)))
+                var kLStar: Double?
+                var prevL = max(cleanPeak, max(0.0, power[k0] - noiseSpec[k0]))
+                var overlapL = false
+                if k0 - 1 >= qMinBin {
+                    for k in stride(from: k0 - 1, through: qMinBin, by: -1) {
+                        let c = max(0.0, power[k] - noiseSpec[k])
+                        if c <= halfTarget {
+                            let cHi = (k == k0 - 1) ? cleanPeak : max(0.0, power[k + 1] - noiseSpec[k + 1])
+                            let frac = (halfTarget - c) / max(1e-30, cHi - c)
+                            kLStar = Double(k) + frac
+                            break
+                        }
+                        if c > prevL * 1.08 {
+                            overlapL = true
+                            break
+                        }
+                        prevL = min(prevL, c)
+                    }
+                }
+                var kRStar: Double?
+                var prevR = max(cleanPeak, max(0.0, power[k0] - noiseSpec[k0]))
+                var overlapR = false
+                if k0 + 1 <= qMaxBin {
+                    for k in (k0 + 1)...qMaxBin {
+                        let c = max(0.0, power[k] - noiseSpec[k])
+                        if c <= halfTarget {
+                            let cHi = (k == k0 + 1) ? cleanPeak : max(0.0, power[k - 1] - noiseSpec[k - 1])
+                            let frac = (cHi - halfTarget) / max(1e-30, cHi - c)
+                            kRStar = Double(k - 1) + frac
+                            break
+                        }
+                        if c > prevR * 1.08 {
+                            overlapR = true
+                            break
+                        }
+                        prevR = min(prevR, c)
+                    }
+                }
+                if !overlapL, !overlapR, let kl = kLStar, let kr = kRStar, kr > kl {
+                    let candidateBW = (kr - kl) * df
+                    if candidateBW >= 0.80 * mainlobeWidthHz {
+                        bwHz = candidateBW
+                        qOut[slot] = cand.fE1Hz / candidateBW
+                        qMask[slot] = 1
+                    }
+                }
+            }
+            detectedExclusions.append((cand.fE1Hz, max(120.0, 1.5 * (bwHz ?? 80.0))))
+
+            let edc = estimateSchroederEDCDecay(
+                signal: analysisSignal,
+                modeFreqHz: cand.fE1Hz,
+                latePreRollSlice: latePreRollSlice,
+                invEnergyGain: isDeconvolvedTail ? invEnergyGain : 1.0,
+                sampleRateHz: sampleRateHz,
+                isDeconvolvedTail: isDeconvolvedTail
+            )
+            if let alpha = edc.alphaPerSec, let dbS = edc.decayDBPerSec {
+                aOut[slot] = alpha
+                aDBOut[slot] = dbS
+                aR2Out[slot] = edc.rSquared
+                aMask[slot] = 1
+            }
+        }
+
+        // Modal-neighborhood-excluded spectral attenuation slope S_att (dB/kHz) over [1.2 .. 6.0 kHz]
+        var xs: [Double] = []
+        var ys: [Double] = []
+        var ws: [Double] = []
+        for k in 1..<halfBins {
+            let fHz = Double(k) * df
+            let fKhz = fHz / 1_000.0
+            if fKhz < 1.2 || fKhz > 6.0 { continue }
+            if detectedExclusions.contains(where: { abs(fHz - $0.centerHz) <= $0.halfWidthHz }) { continue }
+            let cleanP = power[k] - noiseSpec[k]
+            let snrLin = cleanP / max(noiseSpec[k], 1e-30)
+            if cleanP <= 1e-30 || snrLin < 2.0 { continue }
+            xs.append(fKhz)
+            ys.append(10.0 * log10(cleanP))
+            ws.append(min(20.0, sqrt(snrLin)))
+        }
+
+        var sAtt: Double?
+        if xs.count >= 20, let firstX = xs.first, let lastX = xs.last, (lastX - firstX) >= 1.5 {
+            var sw = 0.0, swx = 0.0, swy = 0.0, swxx = 0.0, swxy = 0.0
+            for i in 0..<xs.count {
+                let w = ws[i]
+                sw += w
+                swx += w * xs[i]
+                swy += w * ys[i]
+                swxx += w * xs[i] * xs[i]
+                swxy += w * xs[i] * ys[i]
+            }
+            let denom = sw * swxx - swx * swx
+            if denom > 1e-12 {
+                // Compensate for intrinsic -2.05 dB/kHz ESS inverse-filter deconvolution roll-off established in PC-04
+                let rawSlope = (sw * swxy - swx * swy) / denom
+                sAtt = isDeconvolvedTail ? (rawSlope + 2.05) : rawSlope
+            }
+        }
+
+        // Bubble-Sensitive High-Frequency Scatter [5.5-8.5 kHz] vs [2.0-4.5 kHz]
+        var sumHF = 0.0
+        var sumLF = 0.0
+        for k in 1..<halfBins {
+            let fKhz = (Double(k) * df) / 1_000.0
+            let cleanP = max(0.0, power[k] - noiseSpec[k])
+            if fKhz >= 5.5 && fKhz <= 8.5 { sumHF += cleanP }
+            if fKhz >= 2.0 && fKhz <= 4.5 { sumLF += cleanP }
+        }
+        let sHF55to85: Double? = (sumLF > 1e-30 && sumHF > 1e-30) ? (10.0 * log10(sumHF / sumLF)) : nil
+
+        return ModalVector4(
+            frequenciesHz: fOut,
+            validityMask: fMask,
+            qualityFactorsQ: qOut,
+            qValidityMask: qMask,
+            decayAlphaPerSec: aOut,
+            decayDBPerSec: aDBOut,
+            decayRSquared: aR2Out,
+            decayValidityMask: aMask,
+            spectralAttenuationSlopeDBPerKHz: sAtt,
+            bubbleScatter55to85DB: sHF55to85,
+            latePreRollNoiseDBFS: latePreRollDBFS
         )
     }
 

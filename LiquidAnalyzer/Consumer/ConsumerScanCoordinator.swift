@@ -244,17 +244,24 @@ public final class ConsumerScanCoordinator: ObservableObject {
         guard !source.isEmpty else { return "" }
         let ordered = Array(source.reversed())
         var lines: [String] = [
-            "scan_num,batch_run_id,batch_index,batch_total,timestamp_iso,geometry_condition,control_series_tag,ae_af_wb_lock_state,target_lock_state,target_lock_score,final_status,gate_decision,rejection_reason,final_classification,primary_peak_hz,primary_peak_db,secondary_peaks_hz,secondary_peaks_db,intra_scan_persistence,container_centroid_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_rms_dbfs,echo_return_db,tail_snr_db,alignment_offset_samples,echo_arrival_delay_ms,hf_scatter_db,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores"
+            "scan_num,batch_run_id,batch_index,batch_total,timestamp_iso,geometry_condition,control_series_tag,ae_af_wb_lock_state,target_lock_state,target_lock_score,final_status,gate_decision,rejection_reason,final_classification,primary_peak_hz,primary_peak_db,secondary_peaks_hz,secondary_peaks_db,intra_scan_persistence,container_centroid_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_rms_dbfs,echo_return_db,tail_snr_db,alignment_offset_samples,echo_arrival_delay_ms,hf_scatter_db,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores,is_conditioning_cycle,mode_a_screening,modal_f1_f4_hz,modal_mask_1_4,modal_q1_q4,modal_edc_alpha1_4_per_s,modal_s_att_db_per_khz,late_preroll_dbfs"
         ]
         let isoFmt = ISO8601DateFormatter()
         for (idx, item) in ordered.enumerated() {
             let seq = item.scanSequenceNumber ?? (idx + 1)
             let iso = isoFmt.string(from: item.scannedAt)
             let f = item.measuredFeatures
+            let mv = f?.modalVector
             let secPeaks = f?.secondaryPeaksHz.map { String(format: "%.1f", $0) }.joined(separator: ";") ?? ""
             let secAmps = f?.secondaryPeakAmplitudesDB.map { String(format: "%.2f", $0) }.joined(separator: ";") ?? ""
             let subBands = f?.subBandShapeDB.map { String(format: "%+.2f", $0) }.joined(separator: ";") ?? ""
             let allScores = item.allCandidateDistances?.map { "\($0.profileID):\(String(format: "%.3f", $0.distance))" }.joined(separator: ";") ?? ""
+            let modalFreqs = mv?.frequenciesHz.map { $0.map { String(format: "%.2f", $0) } ?? "NaN" }.joined(separator: ";") ?? ""
+            let modalMask = mv?.validityMask.map { "\($0)" }.joined(separator: ";") ?? ""
+            let modalQs = mv?.qualityFactorsQ.map { $0.map { String(format: "%.2f", $0) } ?? "NaN" }.joined(separator: ";") ?? ""
+            let modalAlphas = mv?.decayAlphaPerSec.map { $0.map { String(format: "%.2f", $0) } ?? "NaN" }.joined(separator: ";") ?? ""
+            let sAttStr = mv?.spectralAttenuationSlopeDBPerKHz.map { String(format: "%.3f", $0) } ?? ""
+            let latePreStr = f.map { String(format: "%.2f", $0.latePreRollNoiseDBFS) } ?? ""
             let row = [
                 "\(seq)",
                 Self.csvEscape(item.batchRunID ?? ""),
@@ -294,7 +301,15 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 Self.csvEscape(item.runnerUpTitle ?? ""),
                 item.secondCandidateDistance.map { String(format: "%.4f", $0) } ?? "",
                 item.winningMargin.map { String(format: "%.4f", $0) } ?? "",
-                Self.csvEscape(allScores)
+                Self.csvEscape(allScores),
+                item.isConditioningCycle ? "true" : "false",
+                Self.csvEscape(item.modeAScreeningState?.rawValue ?? ""),
+                Self.csvEscape(modalFreqs),
+                Self.csvEscape(modalMask),
+                Self.csvEscape(modalQs),
+                Self.csvEscape(modalAlphas),
+                sAttStr,
+                latePreStr
             ].joined(separator: ",")
             lines.append(row)
         }
@@ -587,8 +602,10 @@ public final class ConsumerScanCoordinator: ObservableObject {
                     warmAudioEngine.stopWarmBatchEngine()
                     return
                 }
+                let isCondSweep = WarmBatchAudioEngine.isConditioningSweep(batchIndex: batchIdx, batchTotalCount: targetCount)
                 if targetCount > 1 {
-                    scanningStatusTitle = "Repeatability Gate R1 (\(batchIdx) / \(targetCount))"
+                    let phaseLabel = isCondSweep ? "Conditioning Purge K2" : "Steady-State"
+                    scanningStatusTitle = "Repeatability Gate R2 (\(batchIdx) / \(targetCount) • \(phaseLabel))"
                     scanningStatusSubtitle = "Keep device & target untouched (\(geometryCondition == GeometryTestCondition.stationary15InBaseline.rawValue ? "15-in Baseline" : "Fixed Geometry"))"
                     scanProgress = Double(batchIdx - 1) / Double(targetCount)
                 }
@@ -599,8 +616,10 @@ public final class ConsumerScanCoordinator: ObservableObject {
                         try await timing.sleepMilliseconds(min(remainingCooldownMs, 2_050))
                     }
                 } else {
-                    // Deterministic quiet acoustic ring-down & room decay settle between R1 sweeps on warm engine
-                    try await timing.sleepMilliseconds(650)
+                    // Phase R2-B mandatory >= 900 ms inter-sweep acoustic ring-down dissipation gap on warm engine
+                    try await warmAudioEngine.awaitInterSweepSettle(
+                        requestedMs: WarmBatchAudioEngine.minimumInterSweepSettleMs
+                    )
                 }
 
                 if Task.isCancelled {
@@ -634,7 +653,13 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 if targetCount == 1 { scanProgress = 0.78 }
 
                 try await timing.sleepMilliseconds(postRollMs)
-                let capturedSamples = try warmAudioEngine.closeSweepRecording()
+                let preRollFrames = Int(round(Double(preRollMs) * actualRate / 1_000.0))
+                let activeFrames = Int(round(Double(assetMeta.durationMs) * actualRate / 1_000.0))
+                let captureSegment = try warmAudioEngine.closeSweepRecordingSegment(
+                    nominalPreRollFrames: preRollFrames,
+                    sampleRateHz: actualRate
+                )
+                let capturedSamples = captureSegment.fullSamples
                 timing.recordExcitationCompleted(atUptime: playTimes.endUptimeSeconds)
 
                 // Archive lossless Float32 WAV to disk outside the real-time capture window
@@ -656,9 +681,6 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 }
                 if targetCount == 1 { scanProgress = 0.92 }
 
-                let preRollFrames = Int(round(Double(preRollMs) * actualRate / 1_000.0))
-                let activeFrames = Int(round(Double(assetMeta.durationMs) * actualRate / 1_000.0))
-
                 let resultItem = try classifier.analyzeAndClassify(
                     recordingURL: committed.finalURL,
                     inverseFilterURL: (abs(actualRate - 48_000.0) < 100.0) ? inverseURL : nil,
@@ -677,7 +699,8 @@ public final class ConsumerScanCoordinator: ObservableObject {
                     thumbnailJPEGData: thumbnailData,
                     sceneContextJPEGData: sceneContextData,
                     opticsLocked: lockSnapshot.opticsLocked,
-                    calibratedPrototypes: calibratedPrototypes
+                    calibratedPrototypes: calibratedPrototypes,
+                    latePreRollSilence: captureSegment.latePreRollSilenceSamples
                 )
 
                 // Preserve EVERY scan (including rejected quality & non-liquid controls) — never silently drop!

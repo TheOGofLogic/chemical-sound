@@ -619,6 +619,130 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertEqual(copiedRows, 1)
     }
 
+    func testR2B_WarmBatchAudioEngineEnforcesKCond2And900msInterSweepSettleAndLatePreRollRouting() {
+        XCTAssertEqual(WarmBatchAudioEngine.calibrationConditioningPurgeCount, 2)
+        XCTAssertEqual(WarmBatchAudioEngine.minimumInterSweepSettleMs, 900)
+        XCTAssertEqual(WarmBatchAudioEngine.resolvedInterSweepSettleMs(requestedMs: 650), 900)
+        XCTAssertEqual(WarmBatchAudioEngine.resolvedInterSweepSettleMs(requestedMs: 1_100), 1_100)
+
+        // K_cond = 2 marks Sweeps 1 and 2 as conditioning purge on 20x calibration bursts, leaving single scans unpurged
+        XCTAssertFalse(WarmBatchAudioEngine.isConditioningSweep(batchIndex: 1, batchTotalCount: 1))
+        XCTAssertTrue(WarmBatchAudioEngine.isConditioningSweep(batchIndex: 1, batchTotalCount: 20))
+        XCTAssertTrue(WarmBatchAudioEngine.isConditioningSweep(batchIndex: 2, batchTotalCount: 20))
+        XCTAssertFalse(WarmBatchAudioEngine.isConditioningSweep(batchIndex: 3, batchTotalCount: 20))
+
+        // Simulate Sweep 2 with heavy early pre-roll ring-down bleed in [0..3,000] and clean silence in late pre-roll
+        var buffer = [Float](repeating: 0.0002, count: 28_800)
+        for i in 0..<3_000 {
+            buffer[i] = 0.08 * Float(sin(Double(i) * 0.35))
+        }
+        let lateSlice = WarmBatchAudioEngine.extractLatePreRollSilenceSlice(
+            from: buffer,
+            nominalPreRollFrames: 9_600,
+            alignedExcitationStart: 14_000,
+            sampleRateHz: 48_000.0
+        )
+        XCTAssertGreaterThan(lateSlice.count, 3_000)
+        let maxLateAbs = lateSlice.map { abs($0) }.max() ?? 1.0
+        XCTAssertLessThan(maxLateAbs, 0.001) // Completely excludes the 0.08 early bleed!
+    }
+
+    func testR2B_SchroederEDCUnclampedDecayEliminates145CeilingAnd4ModeMaskEmitsNaNForMissingModes() throws {
+        let (ess, inv) = try Self.loadBundledESSAndInverse()
+        let classifier = OnDeviceAcousticClassifier()
+        var prng: UInt64 = 0x5232_4230_0001_ABCD
+
+        // Synthesize a 2-mode deconvolved container echo (2,200 Hz + 3,600 Hz) with rapid physical decay (tau = 2.8 ms -> alpha ~ 357 s^-1 ~ 3,100 dB/s)
+        let rec = Self.makeDeconvolvedChannelRecording(
+            ess: ess,
+            distanceInches: 15.0,
+            modes: [(2_200.0, 0.00055, 0.0028), (3_600.0, 0.00048, 0.0028)],
+            noiseRMS: 0.0012,
+            onsetJitterSamples: 0,
+            injectStartupTransient: false,
+            prng: &prng
+        )
+        let feat = classifier.extractFeatures(
+            samples: rec,
+            inverseFilter: inv,
+            sampleRateHz: 48_000.0,
+            preRollFrames: 7_200,
+            activeFrames: 9_600
+        )
+
+        // 1. Hardcoded 145.0 dB/s clamp is gone: Schroeder EDC recovers rapid decay >> 145.0 dB/s
+        XCTAssertGreaterThan(feat.decaySlopeDBPerSec, 200.0)
+        XCTAssertGreaterThan(abs(feat.decaySlopeDBPerSec - 145.0), 0.5)
+
+        // 2. 4-Mode Vector recovers the 2 physical modes and sets mask = 0, f = NaN on absent slots 3 & 4 (no zero-padding!)
+        let mv = try XCTUnwrap(feat.modalVector)
+        XCTAssertEqual(mv.validityMask[0], 1)
+        XCTAssertEqual(mv.validityMask[1], 1)
+        XCTAssertEqual(mv.validityMask[2], 0)
+        XCTAssertEqual(mv.validityMask[3], 0)
+        let nanVec = mv.frequenciesWithNaN
+        XCTAssertEqual(nanVec[0], 2_200.0, accuracy: 30.0)
+        XCTAssertEqual(nanVec[1], 3_600.0, accuracy: 30.0)
+        XCTAssertTrue(nanVec[2].isNaN)
+        XCTAssertTrue(nanVec[3].isNaN)
+    }
+
+    func testR2B_BubbleScatterScreeningAndDifferentialBaselineShiftsWorkWithoutCookingOilViscosityClaims() throws {
+        // Verify zero ungrounded airborne viscosity claims remain on Cooking / Vegetable Oil profile
+        let oilProfile = try XCTUnwrap(ReferenceLiquidProfile.provisionalLibrary.first { $0.id == "OIL_VEG" })
+        XCTAssertFalse(oilProfile.categorySummary.localizedCaseInsensitiveContains("viscous"))
+        XCTAssertFalse(oilProfile.tuneProfile.mappingSummary.localizedCaseInsensitiveContains("damped"))
+
+        // Verify DifferentialBaselineVector computes exact relative frequency shifts on valid slots & rejects geometry mismatch
+        let emptyMV = ModalVector4(
+            frequenciesHz: [2_250.0, 4_280.0, nil, nil],
+            validityMask: [1, 1, 0, 0],
+            qualityFactorsQ: [23.0, 37.0, nil, nil],
+            qValidityMask: [1, 1, 0, 0],
+            decayAlphaPerSec: [85.0, 101.0, nil, nil],
+            decayDBPerSec: [738.0, 877.0, nil, nil],
+            decayRSquared: [0.82, 0.79, nil, nil],
+            decayValidityMask: [1, 1, 0, 0],
+            spectralAttenuationSlopeDBPerKHz: -1.33,
+            bubbleScatter55to85DB: -5.52
+        )
+        let loadedMV = ModalVector4(
+            frequenciesHz: [2_160.0, 4_194.4, nil, nil], // -4.0% and -2.0% mass-loading shifts
+            validityMask: [1, 1, 0, 0],
+            qualityFactorsQ: [21.0, 26.0, nil, nil],
+            qValidityMask: [1, 1, 0, 0],
+            decayAlphaPerSec: [93.0, 60.0, nil, nil],
+            decayDBPerSec: [808.0, 521.0, nil, nil],
+            decayRSquared: [0.86, 0.78, nil, nil],
+            decayValidityMask: [1, 1, 0, 0],
+            spectralAttenuationSlopeDBPerKHz: -0.05,
+            bubbleScatter55to85DB: -7.90
+        )
+
+        let shiftOK = DifferentialBaselineVector.compute(
+            sample: loadedMV,
+            sampleGeometry: GeometryTestCondition.stationary15InBaseline.rawValue,
+            reference: emptyMV,
+            referenceTargetID: CalibratedAcousticPrototype.emptyContainerTargetID,
+            referenceGeometry: GeometryTestCondition.stationary15InBaseline.rawValue
+        )
+        XCTAssertTrue(shiftOK.compatible)
+        XCTAssertEqual(shiftOK.shiftMask, [1, 1, 0, 0])
+        XCTAssertEqual(shiftOK.relativeFrequencyShifts[0] ?? 0.0, -0.04, accuracy: 1e-5)
+        XCTAssertEqual(shiftOK.relativeFrequencyShifts[1] ?? 0.0, -0.02, accuracy: 1e-5)
+        XCTAssertNil(shiftOK.relativeFrequencyShifts[2])
+
+        let shiftMismatch = DifferentialBaselineVector.compute(
+            sample: loadedMV,
+            sampleGeometry: GeometryTestCondition.closeRangeSub8In.rawValue,
+            reference: emptyMV,
+            referenceTargetID: CalibratedAcousticPrototype.emptyContainerTargetID,
+            referenceGeometry: GeometryTestCondition.stationary15InBaseline.rawValue
+        )
+        XCTAssertFalse(shiftMismatch.compatible)
+        XCTAssertEqual(shiftMismatch.rejectionCode, "REJECTED_BASELINE_MISMATCH_GEOMETRY")
+    }
+
     // MARK: - Helpers
 
     private static func loadBundledESSAndInverse() throws -> (ess: [Float], inv: [Float]) {

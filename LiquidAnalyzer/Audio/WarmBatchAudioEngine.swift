@@ -155,6 +155,75 @@ private final class NotificationObserverBag: @unchecked Sendable {
 /// logs CoreAudio route/interruption events, and enforces `validateRouteUnchanged()` across sweeps.
 @MainActor
 public final class WarmBatchAudioEngine {
+    /// Phase R2-B (`LA-R2-SPEC-001` / `LA-R2-A-SANDBOX-REPORT-001`) mandatory batch conditioning & settle constants.
+    nonisolated public static let calibrationConditioningPurgeCount: Int = 2
+    nonisolated public static let minimumInterSweepSettleMs: Int = 900
+
+    /// Returns true when a sweep index belongs to the `K_cond = 2` (`index in {1, 2}`) conditioning/purge window
+    /// of a multi-sweep calibration or repeatability burst (`batchTotalCount >= 5`).
+    nonisolated public static func isConditioningSweep(batchIndex: Int, batchTotalCount: Int) -> Bool {
+        guard batchTotalCount >= 5 else { return false }
+        return batchIndex >= 1 && batchIndex <= calibrationConditioningPurgeCount
+    }
+
+    /// Enforces the mandatory `>= 900 ms` inter-sweep acoustic ring-down dissipation gap.
+    nonisolated public static func resolvedInterSweepSettleMs(requestedMs: Int = 900) -> Int {
+        max(minimumInterSweepSettleMs, requestedMs)
+    }
+
+    /// Computes sample bounds for the clean late pre-roll silence window `[onset - 95 ms .. onset - 10 ms]`,
+    /// skipping early pre-roll (`0..105 ms`) where prior-sweep container/session bleed was observed in R2-A,
+    /// while adapting safely to shorter unit-test buffers.
+    nonisolated public static func extractLatePreRollSilenceBounds(
+        totalSamples: Int,
+        nominalPreRollFrames: Int,
+        alignedExcitationStart: Int? = nil,
+        sampleRateHz: Double = 48_000.0
+    ) -> Range<Int> {
+        guard totalSamples > 64 else { return 0..<max(0, totalSamples) }
+        let onset = min(totalSamples, max(0, alignedExcitationStart ?? nominalPreRollFrames))
+        let guardBeforeOnset = Int(0.010 * sampleRateHz)
+        let preEnd = max(0, onset - guardBeforeOnset)
+        guard preEnd > 64 else {
+            return 0..<min(totalSamples, max(1, onset))
+        }
+        let preferredLateSpan = Int(0.085 * sampleRateHz) // 85 ms clean late pre-roll window
+        let minHardwareStartupSkip = min(preEnd / 2, Int(0.025 * sampleRateHz))
+        let candidateStart = max(minHardwareStartupSkip, preEnd - preferredLateSpan)
+        if preEnd - candidateStart >= 256 {
+            return candidateStart..<preEnd
+        }
+        return 0..<preEnd
+    }
+
+    /// Extracts the clean late pre-roll silence buffer used for baseline ambient & deconvolved noise subtraction.
+    nonisolated public static func extractLatePreRollSilenceSlice(
+        from samples: [Float],
+        nominalPreRollFrames: Int,
+        alignedExcitationStart: Int? = nil,
+        sampleRateHz: Double = 48_000.0
+    ) -> [Float] {
+        let bounds = extractLatePreRollSilenceBounds(
+            totalSamples: samples.count,
+            nominalPreRollFrames: nominalPreRollFrames,
+            alignedExcitationStart: alignedExcitationStart,
+            sampleRateHz: sampleRateHz
+        )
+        guard !bounds.isEmpty, bounds.upperBound <= samples.count else { return [] }
+        return Array(samples[bounds])
+    }
+
+    public struct SweepCaptureSegment: Sendable, Equatable {
+        public let fullSamples: [Float]
+        public let latePreRollSilenceSamples: [Float]
+        public let latePreRollRange: Range<Int>
+
+        public init(fullSamples: [Float], latePreRollSilenceSamples: [Float], latePreRollRange: Range<Int>) {
+            self.fullSamples = fullSamples
+            self.latePreRollSilenceSamples = latePreRollSilenceSamples
+            self.latePreRollRange = latePreRollRange
+        }
+    }
     public struct RouteSnapshot: Sendable, Equatable {
         public let sampleRate: Double
         public let inputLatency: TimeInterval
@@ -394,6 +463,37 @@ public final class WarmBatchAudioEngine {
         let captured = try sampleStore.closeSegment()
         try validateRouteUnchanged()
         return captured
+    }
+
+    /// Closes the active sweep segment and routes both the lossless full capture and the isolated late pre-roll silence slice.
+    public func closeSweepRecordingSegment(
+        nominalPreRollFrames: Int,
+        sampleRateHz: Double = 48_000.0
+    ) throws -> SweepCaptureSegment {
+        let captured = try closeSweepRecording()
+        let bounds = Self.extractLatePreRollSilenceBounds(
+            totalSamples: captured.count,
+            nominalPreRollFrames: nominalPreRollFrames,
+            alignedExcitationStart: nil,
+            sampleRateHz: sampleRateHz
+        )
+        let lateSlice = (!bounds.isEmpty && bounds.upperBound <= captured.count) ? Array(captured[bounds]) : []
+        return SweepCaptureSegment(
+            fullSamples: captured,
+            latePreRollSilenceSamples: lateSlice,
+            latePreRollRange: bounds
+        )
+    }
+
+    /// Enforces the mandatory `>= 900 ms` inter-sweep quiet acoustic settling gap on the warm engine.
+    public func awaitInterSweepSettle(requestedMs: Int = 900) async throws {
+        guard isRunning else {
+            throw WarmAudioEngineError.notRunning
+        }
+        try validateRouteUnchanged()
+        let settleMs = Self.resolvedInterSweepSettleMs(requestedMs: requestedMs)
+        try await Task.sleep(for: .milliseconds(settleMs))
+        try validateRouteUnchanged()
     }
 
     public func stopWarmBatchEngine() {

@@ -25,6 +25,214 @@ public enum ConsumerMatchStatus: String, Codable, Equatable, Sendable {
     case unclearScan = "INVALID_MEASUREMENT"
 }
 
+/// Authoritative Phase R2-B (`LA-R2-SPEC-001` Sec. 3.1.4) airborne `MODE_A` physical screening states.
+/// `MODE_A` is strictly restricted to verifiable acoustic-structural screening, bubble-scatter detection,
+/// and calibrated container baseline shifts (`Delta X_empty`, `Delta X_water`) — never uncalibrated molecular or viscosity claims.
+public enum ModeAScreeningState: String, Codable, CaseIterable, Equatable, Sendable {
+    case emptyContainer = "EMPTY_CONTAINER"
+    case liquidLoaded = "LIQUID_LOADED"
+    case bubbleScatterDetected = "BUBBLE_SCATTER_DETECTED"
+    case nonstandardSurfaceResponse = "NONSTANDARD_SURFACE_RESPONSE"
+    case calibratedClassCandidate = "CALIBRATED_CLASS_CANDIDATE"
+    case noValidatedMatch = "NO_VALIDATED_MATCH"
+    case rejectedSignalQuality = "REJECTED_SIGNAL_QUALITY"
+    case rejectedBaselineMismatch = "REJECTED_BASELINE_MISMATCH"
+}
+
+/// Phase R2-B 4-mode multi-parameter acoustic vector (`F = [f_1..f_4]`, `Q = [Q_1..Q_4]`, `alpha = [alpha_1..alpha_4]`)
+/// with explicit missing-mode validity masks (`validityMask[i] == 0` -> `frequenciesWithNaN[i].isNaN == true`).
+/// Zero-padding, synthetic frequency injection, and band-centroid substitution are strictly prohibited.
+public struct ModalVector4: Codable, Equatable, Sendable {
+    public let frequenciesHz: [Double?]
+    public let validityMask: [Int]
+    public let qualityFactorsQ: [Double?]
+    public let qValidityMask: [Int]
+    public let decayAlphaPerSec: [Double?]
+    public let decayDBPerSec: [Double?]
+    public let decayRSquared: [Double?]
+    public let decayValidityMask: [Int]
+    public let spectralAttenuationSlopeDBPerKHz: Double?
+    public let bubbleScatter55to85DB: Double?
+    public let latePreRollNoiseDBFS: Double
+
+    /// Returns the 4-element modal frequency vector `[f_1..f_4]` with `Double.nan` wherever `validityMask[i] == 0`.
+    public var frequenciesWithNaN: [Double] {
+        (0..<4).map { idx in
+            guard idx < validityMask.count, validityMask[idx] == 1,
+                  idx < frequenciesHz.count, let f = frequenciesHz[idx], f.isFinite else {
+                return Double.nan
+            }
+            return f
+        }
+    }
+
+    public init(
+        frequenciesHz: [Double?],
+        validityMask: [Int],
+        qualityFactorsQ: [Double?],
+        qValidityMask: [Int],
+        decayAlphaPerSec: [Double?],
+        decayDBPerSec: [Double?],
+        decayRSquared: [Double?],
+        decayValidityMask: [Int],
+        spectralAttenuationSlopeDBPerKHz: Double? = nil,
+        bubbleScatter55to85DB: Double? = nil,
+        latePreRollNoiseDBFS: Double = -82.0
+    ) {
+        self.frequenciesHz = Self.pad4(frequenciesHz)
+        self.validityMask = Self.padMask4(validityMask, values: frequenciesHz)
+        self.qualityFactorsQ = Self.pad4(qualityFactorsQ)
+        self.qValidityMask = Self.padMask4(qValidityMask, values: qualityFactorsQ)
+        self.decayAlphaPerSec = Self.pad4(decayAlphaPerSec)
+        self.decayDBPerSec = Self.pad4(decayDBPerSec)
+        self.decayRSquared = Self.pad4(decayRSquared)
+        self.decayValidityMask = Self.padMask4(decayValidityMask, values: decayAlphaPerSec)
+        self.spectralAttenuationSlopeDBPerKHz = spectralAttenuationSlopeDBPerKHz
+        self.bubbleScatter55to85DB = bubbleScatter55to85DB
+        self.latePreRollNoiseDBFS = latePreRollNoiseDBFS
+    }
+
+    public static let emptyMasked = ModalVector4(
+        frequenciesHz: [nil, nil, nil, nil],
+        validityMask: [0, 0, 0, 0],
+        qualityFactorsQ: [nil, nil, nil, nil],
+        qValidityMask: [0, 0, 0, 0],
+        decayAlphaPerSec: [nil, nil, nil, nil],
+        decayDBPerSec: [nil, nil, nil, nil],
+        decayRSquared: [nil, nil, nil, nil],
+        decayValidityMask: [0, 0, 0, 0],
+        spectralAttenuationSlopeDBPerKHz: nil,
+        bubbleScatter55to85DB: nil,
+        latePreRollNoiseDBFS: -120.0
+    )
+
+    private static func pad4(_ arr: [Double?]) -> [Double?] {
+        var out: [Double?] = Array(arr.prefix(4)).map { val in
+            guard let v = val, v.isFinite else { return nil }
+            return v
+        }
+        while out.count < 4 { out.append(nil) }
+        return out
+    }
+
+    private static func padMask4(_ mask: [Int], values: [Double?]) -> [Int] {
+        let paddedVals = pad4(values)
+        return (0..<4).map { idx in
+            let flag = idx < mask.count ? mask[idx] : 0
+            return (flag == 1 && paddedVals[idx] != nil) ? 1 : 0
+        }
+    }
+}
+
+/// Differential baseline normalization vector (`Delta X_empty` or `Delta X_water`) computed strictly on mutually valid slots.
+public struct DifferentialBaselineVector: Codable, Equatable, Sendable {
+    public let referenceTargetID: String
+    public let compatible: Bool
+    public let rejectionCode: String?
+    public let relativeFrequencyShifts: [Double?]
+    public let shiftMask: [Int]
+    public let deltaDecayAlphaPerSec: [Double?]
+    public let deltaQualityFactorQ: [Double?]
+    public let deltaAttenuationSlopeDBPerKHz: Double?
+    public let deltaBubbleScatter55to85DB: Double?
+
+    public init(
+        referenceTargetID: String,
+        compatible: Bool,
+        rejectionCode: String? = nil,
+        relativeFrequencyShifts: [Double?] = [nil, nil, nil, nil],
+        shiftMask: [Int] = [0, 0, 0, 0],
+        deltaDecayAlphaPerSec: [Double?] = [nil, nil, nil, nil],
+        deltaQualityFactorQ: [Double?] = [nil, nil, nil, nil],
+        deltaAttenuationSlopeDBPerKHz: Double? = nil,
+        deltaBubbleScatter55to85DB: Double? = nil
+    ) {
+        self.referenceTargetID = referenceTargetID
+        self.compatible = compatible
+        self.rejectionCode = rejectionCode
+        self.relativeFrequencyShifts = relativeFrequencyShifts
+        self.shiftMask = shiftMask
+        self.deltaDecayAlphaPerSec = deltaDecayAlphaPerSec
+        self.deltaQualityFactorQ = deltaQualityFactorQ
+        self.deltaAttenuationSlopeDBPerKHz = deltaAttenuationSlopeDBPerKHz
+        self.deltaBubbleScatter55to85DB = deltaBubbleScatter55to85DB
+    }
+
+    public static func compute(
+        sample: ModalVector4,
+        sampleGeometry: String?,
+        reference: ModalVector4,
+        referenceTargetID: String,
+        referenceGeometry: String?
+    ) -> DifferentialBaselineVector {
+        if let sg = sampleGeometry, let rg = referenceGeometry, !sg.isEmpty, !rg.isEmpty, sg != rg {
+            return DifferentialBaselineVector(
+                referenceTargetID: referenceTargetID,
+                compatible: false,
+                rejectionCode: "REJECTED_BASELINE_MISMATCH_GEOMETRY"
+            )
+        }
+
+        var relF: [Double?] = [nil, nil, nil, nil]
+        var fMask: [Int] = [0, 0, 0, 0]
+        var dAlpha: [Double?] = [nil, nil, nil, nil]
+        var dQ: [Double?] = [nil, nil, nil, nil]
+
+        // Associate each valid sample slot to the nearest valid reference slot within +-250 Hz (or 12% shift)
+        var usedRefSlots = Set<Int>()
+        for i in 0..<4 {
+            guard sample.validityMask[i] == 1, let fs = sample.frequenciesHz[i], fs > 0 else { continue }
+            var bestRefIdx: Int?
+            var bestDist = Double.infinity
+            for j in 0..<4 where !usedRefSlots.contains(j) {
+                guard reference.validityMask[j] == 1, let fr = reference.frequenciesHz[j], fr > 0 else { continue }
+                let dist = abs(fs - fr)
+                let maxAllowed = max(250.0, 0.14 * fr)
+                if dist <= maxAllowed && dist < bestDist {
+                    bestDist = dist
+                    bestRefIdx = j
+                }
+            }
+            if let rIdx = bestRefIdx, let fr = reference.frequenciesHz[rIdx], fr > 0 {
+                usedRefSlots.insert(rIdx)
+                relF[i] = (fs - fr) / fr
+                fMask[i] = 1
+                if sample.decayValidityMask[i] == 1, reference.decayValidityMask[rIdx] == 1,
+                   let asmp = sample.decayAlphaPerSec[i], let aref = reference.decayAlphaPerSec[rIdx] {
+                    dAlpha[i] = asmp - aref
+                }
+                if sample.qValidityMask[i] == 1, reference.qValidityMask[rIdx] == 1,
+                   let qsmp = sample.qualityFactorsQ[i], let qref = reference.qualityFactorsQ[rIdx] {
+                    dQ[i] = qsmp - qref
+                }
+            }
+        }
+
+        let dSlope: Double? = {
+            guard let s = sample.spectralAttenuationSlopeDBPerKHz,
+                  let r = reference.spectralAttenuationSlopeDBPerKHz else { return nil }
+            return s - r
+        }()
+        let dScatter: Double? = {
+            guard let s = sample.bubbleScatter55to85DB,
+                  let r = reference.bubbleScatter55to85DB else { return nil }
+            return s - r
+        }()
+
+        return DifferentialBaselineVector(
+            referenceTargetID: referenceTargetID,
+            compatible: true,
+            rejectionCode: nil,
+            relativeFrequencyShifts: relF,
+            shiftMask: fMask,
+            deltaDecayAlphaPerSec: dAlpha,
+            deltaQualityFactorQ: dQ,
+            deltaAttenuationSlopeDBPerKHz: dSlope,
+            deltaBubbleScatter55to85DB: dScatter
+        )
+    }
+}
+
 /// Geometry condition tag preventing substantially different camera/container distances from being pooled
 /// into the same Repeatability Gate R1 summary statistics.
 public enum GeometryTestCondition: String, Codable, CaseIterable, Equatable, Sendable {
@@ -120,6 +328,9 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
     public let opticalInteriorContrast: Double
     public let opticalRimContrast: Double
     public let opticsLocked: Bool
+    public let latePreRollNoiseDBFS: Double
+    public let preRollExcessHFDB: Double
+    public let modalVector: ModalVector4?
 
     public init(
         activeSNRDB: Double,
@@ -148,7 +359,10 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         opticalCenterBrightness: Double = 0.50,
         opticalInteriorContrast: Double = 0.02,
         opticalRimContrast: Double = 0.04,
-        opticsLocked: Bool = false
+        opticsLocked: Bool = false,
+        latePreRollNoiseDBFS: Double = -82.0,
+        preRollExcessHFDB: Double = 0.0,
+        modalVector: ModalVector4? = nil
     ) {
         self.activeSNRDB = activeSNRDB
         self.activeRMSDBFS = activeRMSDBFS
@@ -177,6 +391,9 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         self.opticalInteriorContrast = opticalInteriorContrast
         self.opticalRimContrast = opticalRimContrast
         self.opticsLocked = opticsLocked
+        self.latePreRollNoiseDBFS = latePreRollNoiseDBFS
+        self.preRollExcessHFDB = preRollExcessHFDB
+        self.modalVector = modalVector
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -207,6 +424,9 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         case opticalInteriorContrast
         case opticalRimContrast
         case opticsLocked
+        case latePreRollNoiseDBFS
+        case preRollExcessHFDB
+        case modalVector
     }
 
     public init(from decoder: Decoder) throws {
@@ -241,6 +461,9 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         self.opticalInteriorContrast = try c.decodeIfPresent(Double.self, forKey: .opticalInteriorContrast) ?? 0.02
         self.opticalRimContrast = try c.decodeIfPresent(Double.self, forKey: .opticalRimContrast) ?? 0.04
         self.opticsLocked = try c.decodeIfPresent(Bool.self, forKey: .opticsLocked) ?? false
+        self.latePreRollNoiseDBFS = try c.decodeIfPresent(Double.self, forKey: .latePreRollNoiseDBFS) ?? -82.0
+        self.preRollExcessHFDB = try c.decodeIfPresent(Double.self, forKey: .preRollExcessHFDB) ?? 0.0
+        self.modalVector = try c.decodeIfPresent(ModalVector4.self, forKey: .modalVector)
     }
 }
 
@@ -713,12 +936,12 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
             id: "OIL_VEG",
             displayName: "Cooking / Vegetable Oil",
             formulaDisplay: "Triglyceride",
-            categorySummary: "Viscous Lipid Reference",
+            categorySummary: "Lipid Reference Profile (Optical / Calibrated Shift Only — No Airborne Viscosity Claim)",
             constituents: [
                 ReferenceConstituent(
                     symbol: "C · H · O",
                     name: "Plant Triglycerides",
-                    roleDescription: "Viscous lipid reference class"
+                    roleDescription: "Lipid reference class (airborne MODE_A makes no uncalibrated viscosity claim)"
                 )
             ],
             expectedCentroidHz: 1_860.0,
@@ -728,7 +951,7 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
             expectedHighScatterDB: -11.2,
             tuneProfile: ChemicalTuneProfile(
                 formulaDisplay: "C · H · O",
-                mappingSummary: "Mapped musical representation featuring warm, rapidly damped low-register carbon-chain harmonics.",
+                mappingSummary: "Mapped musical representation featuring low-register carbon-chain intervals.",
                 baseFrequenciesHz: [196.00, 293.66, 392.00, 440.00, 587.33], // G3, D4, G4, A4, D5
                 shimmerMultiplier: 0.72,
                 warmthDecayPerSec: 2.35
@@ -772,6 +995,11 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
     public let winningMargin: Double?
     public let allCandidateDistances: [CandidateScoreEntry]?
     public let thumbnailJPEGData: Data?
+    public let isConditioningCycle: Bool
+    public let conditioningTag: String?
+    public let modeAScreeningState: ModeAScreeningState?
+    public let deltaEmptyBaseline: DifferentialBaselineVector?
+    public let deltaWaterBaseline: DifferentialBaselineVector?
 
     public init(
         id: UUID = UUID(),
@@ -806,7 +1034,12 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         secondCandidateDistance: Double? = nil,
         winningMargin: Double? = nil,
         allCandidateDistances: [CandidateScoreEntry]? = nil,
-        thumbnailJPEGData: Data? = nil
+        thumbnailJPEGData: Data? = nil,
+        isConditioningCycle: Bool? = nil,
+        conditioningTag: String? = nil,
+        modeAScreeningState: ModeAScreeningState? = nil,
+        deltaEmptyBaseline: DifferentialBaselineVector? = nil,
+        deltaWaterBaseline: DifferentialBaselineVector? = nil
     ) {
         self.id = id
         self.scannedAt = scannedAt
@@ -841,6 +1074,75 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         self.winningMargin = winningMargin
         self.allCandidateDistances = allCandidateDistances
         self.thumbnailJPEGData = thumbnailJPEGData
+        let autoCond = WarmBatchAudioEngine.isConditioningSweep(
+            batchIndex: batchScanIndex ?? 0,
+            batchTotalCount: batchTotalCount ?? 1
+        )
+        let resolvedCond = isConditioningCycle ?? autoCond
+        self.isConditioningCycle = resolvedCond
+        self.conditioningTag = conditioningTag ?? (resolvedCond ? "ACQ_WARMUP_PURGE_K2" : nil)
+        self.modeAScreeningState = modeAScreeningState
+        self.deltaEmptyBaseline = deltaEmptyBaseline
+        self.deltaWaterBaseline = deltaWaterBaseline
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, scannedAt, scanSequenceNumber, batchRunID, batchScanIndex, batchTotalCount
+        case geometryCondition, controlSeriesTag, aeAfWbLockState, targetLockState, targetLockScore
+        case gateDecision, rejectionReason, status, title, formulaDisplay, statusBadgeText
+        case confidencePercent, scientificNote, constituents, tuneProfile
+        case measuredPeakHz, measuredCentroidHz, measuredDecayDBPerSec, measuredFeatures
+        case topCandidateName, topCandidateDistance, runnerUpTitle, runnerUpSimilarityPercent
+        case secondCandidateDistance, winningMargin, allCandidateDistances, thumbnailJPEGData
+        case isConditioningCycle, conditioningTag, modeAScreeningState
+        case deltaEmptyBaseline, deltaWaterBaseline
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.scannedAt = try c.decode(Date.self, forKey: .scannedAt)
+        self.scanSequenceNumber = try c.decodeIfPresent(Int.self, forKey: .scanSequenceNumber)
+        self.batchRunID = try c.decodeIfPresent(String.self, forKey: .batchRunID)
+        let bIdx = try c.decodeIfPresent(Int.self, forKey: .batchScanIndex)
+        let bTot = try c.decodeIfPresent(Int.self, forKey: .batchTotalCount)
+        self.batchScanIndex = bIdx
+        self.batchTotalCount = bTot
+        self.geometryCondition = try c.decodeIfPresent(String.self, forKey: .geometryCondition)
+        self.controlSeriesTag = try c.decodeIfPresent(String.self, forKey: .controlSeriesTag)
+        self.aeAfWbLockState = try c.decodeIfPresent(String.self, forKey: .aeAfWbLockState)
+        self.targetLockState = try c.decodeIfPresent(String.self, forKey: .targetLockState)
+        self.targetLockScore = try c.decodeIfPresent(Double.self, forKey: .targetLockScore)
+        self.gateDecision = try c.decodeIfPresent(String.self, forKey: .gateDecision)
+        self.rejectionReason = try c.decodeIfPresent(String.self, forKey: .rejectionReason)
+        self.status = try c.decode(ConsumerMatchStatus.self, forKey: .status)
+        self.title = try c.decode(String.self, forKey: .title)
+        self.formulaDisplay = try c.decode(String.self, forKey: .formulaDisplay)
+        self.statusBadgeText = try c.decode(String.self, forKey: .statusBadgeText)
+        self.confidencePercent = try c.decodeIfPresent(Int.self, forKey: .confidencePercent)
+        self.scientificNote = try c.decode(String.self, forKey: .scientificNote)
+        self.constituents = try c.decode([ReferenceConstituent].self, forKey: .constituents)
+        self.tuneProfile = try c.decode(ChemicalTuneProfile.self, forKey: .tuneProfile)
+        self.measuredPeakHz = try c.decode(Double.self, forKey: .measuredPeakHz)
+        self.measuredCentroidHz = try c.decode(Double.self, forKey: .measuredCentroidHz)
+        self.measuredDecayDBPerSec = try c.decode(Double.self, forKey: .measuredDecayDBPerSec)
+        self.measuredFeatures = try c.decodeIfPresent(ExtractedConsumerFeatures.self, forKey: .measuredFeatures)
+        self.topCandidateName = try c.decodeIfPresent(String.self, forKey: .topCandidateName)
+        self.topCandidateDistance = try c.decodeIfPresent(Double.self, forKey: .topCandidateDistance)
+        self.runnerUpTitle = try c.decodeIfPresent(String.self, forKey: .runnerUpTitle)
+        self.runnerUpSimilarityPercent = try c.decodeIfPresent(Int.self, forKey: .runnerUpSimilarityPercent)
+        self.secondCandidateDistance = try c.decodeIfPresent(Double.self, forKey: .secondCandidateDistance)
+        self.winningMargin = try c.decodeIfPresent(Double.self, forKey: .winningMargin)
+        self.allCandidateDistances = try c.decodeIfPresent([CandidateScoreEntry].self, forKey: .allCandidateDistances)
+        self.thumbnailJPEGData = try c.decodeIfPresent(Data.self, forKey: .thumbnailJPEGData)
+        let decodedCond = try c.decodeIfPresent(Bool.self, forKey: .isConditioningCycle)
+            ?? WarmBatchAudioEngine.isConditioningSweep(batchIndex: bIdx ?? 0, batchTotalCount: bTot ?? 1)
+        self.isConditioningCycle = decodedCond
+        self.conditioningTag = try c.decodeIfPresent(String.self, forKey: .conditioningTag)
+            ?? (decodedCond ? "ACQ_WARMUP_PURGE_K2" : nil)
+        self.modeAScreeningState = try c.decodeIfPresent(ModeAScreeningState.self, forKey: .modeAScreeningState)
+        self.deltaEmptyBaseline = try c.decodeIfPresent(DifferentialBaselineVector.self, forKey: .deltaEmptyBaseline)
+        self.deltaWaterBaseline = try c.decodeIfPresent(DifferentialBaselineVector.self, forKey: .deltaWaterBaseline)
     }
 }
 
@@ -1204,5 +1506,352 @@ public enum RepeatabilityPeakStabilityAnalyzer {
             ? values.reduce(0.0) { $0 + ($1 - mean) * ($1 - mean) } / (n - 1.0)
             : 0.0
         return (mean, sqrt(max(0.0, variance)), values.min() ?? mean, values.max() ?? mean)
+    }
+}
+
+/// Phase R2-B (`LA-R2-A-SANDBOX-REPORT-001`) continuity-preserving 4-mode vector tracker across multi-sweep bursts.
+/// Purges `K_cond = 2` conditioning sweeps on calibration bursts, associates modal peaks via Hungarian minimum-cost
+/// bipartite matching, and emits `mask_i = 0` (`frequenciesWithNaN[i] == .nan`) for any absent mode without zero-padding.
+public enum BatchModalVectorTracker {
+    public struct SweepModeObservation: Sendable, Equatable {
+        public let freqHz: Double
+        public let ampDB: Double
+        public let qFactor: Double?
+        public let alphaPerSec: Double?
+        public let alphaDBPerSec: Double?
+        public let alphaRSquared: Double?
+
+        public init(
+            freqHz: Double,
+            ampDB: Double,
+            qFactor: Double? = nil,
+            alphaPerSec: Double? = nil,
+            alphaDBPerSec: Double? = nil,
+            alphaRSquared: Double? = nil
+        ) {
+            self.freqHz = freqHz
+            self.ampDB = ampDB
+            self.qFactor = qFactor
+            self.alphaPerSec = alphaPerSec
+            self.alphaDBPerSec = alphaDBPerSec
+            self.alphaRSquared = alphaRSquared
+        }
+    }
+
+    private struct ActiveTrack {
+        let trackID: Int
+        let birthSweep: Int
+        let fInit: Double
+        var lastSweep: Int
+        var fHat: Double
+        var vHat: Double
+        var ampHat: Double
+        var qHat: Double?
+        var alphaHat: Double?
+        var observations: [SweepModeObservation]
+    }
+
+    public static func aggregateSteadyStateModalVector(
+        items: [ConsumerScanItem],
+        purgeConditioningK2: Bool = true,
+        persistenceFraction: Double = 0.65
+    ) -> ModalVector4 {
+        let ordered = items.sorted { ($0.batchScanIndex ?? 0) < ($1.batchScanIndex ?? 0) }
+        let eligible = ordered.filter { item in
+            guard item.status != .unclearScan && item.status != .nonLiquidMaterial else { return false }
+            if purgeConditioningK2 && item.isConditioningCycle { return false }
+            return true
+        }
+        guard !eligible.isEmpty else { return .emptyMasked }
+
+        var sweepList: [(sweepIdx: Int, modes: [SweepModeObservation])] = []
+        var slopes: [Double] = []
+        var scatters: [Double] = []
+        var latePreRolls: [Double] = []
+
+        for (offset, item) in eligible.enumerated() {
+            let sIdx = item.batchScanIndex ?? (offset + 1)
+            guard let feat = item.measuredFeatures else { continue }
+            latePreRolls.append(feat.latePreRollNoiseDBFS)
+            if let mv = feat.modalVector {
+                if let s = mv.spectralAttenuationSlopeDBPerKHz, s.isFinite { slopes.append(s) }
+                if let sc = mv.bubbleScatter55to85DB, sc.isFinite { scatters.append(sc) }
+                var cands: [SweepModeObservation] = []
+                for k in 0..<4 where mv.validityMask[k] == 1 {
+                    if let f = mv.frequenciesHz[k], f.isFinite {
+                        let amp = k == 0
+                            ? feat.primaryPeakAmplitudeDB
+                            : (k - 1 < feat.secondaryPeakAmplitudesDB.count ? feat.secondaryPeakAmplitudesDB[k - 1] : feat.primaryPeakAmplitudeDB - 3.0)
+                        cands.append(
+                            SweepModeObservation(
+                                freqHz: f,
+                                ampDB: amp,
+                                qFactor: mv.qValidityMask[k] == 1 ? mv.qualityFactorsQ[k] : nil,
+                                alphaPerSec: mv.decayValidityMask[k] == 1 ? mv.decayAlphaPerSec[k] : nil,
+                                alphaDBPerSec: mv.decayValidityMask[k] == 1 ? mv.decayDBPerSec[k] : nil,
+                                alphaRSquared: mv.decayValidityMask[k] == 1 ? mv.decayRSquared[k] : nil
+                            )
+                        )
+                    }
+                }
+                sweepList.append((sIdx, cands))
+            } else {
+                var cands = [SweepModeObservation(freqHz: item.measuredPeakHz, ampDB: feat.primaryPeakAmplitudeDB)]
+                for (k, sf) in feat.secondaryPeaksHz.enumerated() where sf > 0 {
+                    let sa = k < feat.secondaryPeakAmplitudesDB.count ? feat.secondaryPeakAmplitudesDB[k] : (feat.primaryPeakAmplitudeDB - 3.0)
+                    cands.append(SweepModeObservation(freqHz: sf, ampDB: sa))
+                }
+                sweepList.append((sIdx, cands))
+            }
+        }
+
+        return trackSweeps(
+            sweeps: sweepList,
+            persistenceFraction: persistenceFraction,
+            medianSlope: median(slopes),
+            medianScatter: median(scatters),
+            medianLatePreRoll: median(latePreRolls) ?? -82.0
+        )
+    }
+
+    public static func trackSweeps(
+        sweeps: [(sweepIdx: Int, modes: [SweepModeObservation])],
+        persistenceFraction: Double = 0.65,
+        enableDriftVelocity: Bool = false,
+        medianSlope: Double? = nil,
+        medianScatter: Double? = nil,
+        medianLatePreRoll: Double = -82.0
+    ) -> ModalVector4 {
+        guard !sweeps.isEmpty else { return .emptyMasked }
+        var tracks: [ActiveTrack] = []
+        var nextID = 1
+        let unmatchedCost = 9.0
+
+        for (sweepIdx, cands) in sweeps {
+            if tracks.isEmpty {
+                for c in cands.sorted(by: { $0.freqHz < $1.freqHz }) {
+                    tracks.append(
+                        ActiveTrack(
+                            trackID: nextID,
+                            birthSweep: sweepIdx,
+                            fInit: c.freqHz,
+                            lastSweep: sweepIdx,
+                            fHat: c.freqHz,
+                            vHat: 0.0,
+                            ampHat: c.ampDB,
+                            qHat: c.qFactor,
+                            alphaHat: c.alphaPerSec,
+                            observations: [c]
+                        )
+                    )
+                    nextID += 1
+                }
+                continue
+            }
+
+            let nT = tracks.count
+            let nC = cands.count
+            var costMat = Array(repeating: Array(repeating: unmatchedCost, count: nC + nT), count: nT)
+
+            for i in 0..<nT {
+                let tr = tracks[i]
+                let dt = Double(max(1, sweepIdx - tr.lastSweep))
+                let fPred = tr.fHat + (enableDriftVelocity ? tr.vHat * dt : 0.0)
+                let effSigmaF = 45.0 * sqrt(dt)
+                let maxDisp = max(150.0 * sqrt(dt), 0.045 * tr.fHat)
+
+                for j in 0..<nC {
+                    let c = cands[j]
+                    let df = abs(c.freqHz - fPred)
+                    if df > maxDisp {
+                        costMat[i][j] = 1e5
+                        continue
+                    }
+                    var cost = (df / effSigmaF) * (df / effSigmaF)
+                    let dAmp = (c.ampDB - tr.ampHat) / 6.0
+                    cost += 0.35 * dAmp * dAmp
+                    if let qc = c.qFactor, let qt = tr.qHat, qc > 0, qt > 0 {
+                        let lq = log(qc / qt)
+                        cost += 0.80 * lq * lq
+                    }
+                    if let ac = c.alphaPerSec, let at = tr.alphaHat, ac > 0, at > 0 {
+                        let la = log(ac / at)
+                        cost += 0.80 * la * la
+                    }
+                    costMat[i][j] = cost
+                }
+                costMat[i][nC + i] = unmatchedCost
+            }
+
+            let assignment = solveHungarian(costMatrix: costMat)
+            var matchedCand = Set<Int>()
+            for i in 0..<nT {
+                let col = assignment[i]
+                if col >= 0 && col < nC && costMat[i][col] < unmatchedCost {
+                    matchedCand.insert(col)
+                    let c = cands[col]
+                    let dt = Double(max(1, sweepIdx - tracks[i].lastSweep))
+                    let fPred = tracks[i].fHat + (enableDriftVelocity ? tracks[i].vHat * dt : 0.0)
+                    let res = c.freqHz - fPred
+                    if enableDriftVelocity {
+                        if tracks[i].observations.count == 1 {
+                            tracks[i].vHat = (c.freqHz - tracks[i].fHat) / dt
+                            tracks[i].fHat = c.freqHz
+                        } else {
+                            tracks[i].fHat = fPred + 0.70 * res
+                            tracks[i].vHat += 0.35 * (res / dt)
+                        }
+                    } else {
+                        tracks[i].fHat = 0.35 * tracks[i].fHat + 0.65 * c.freqHz
+                    }
+                    tracks[i].ampHat = 0.5 * tracks[i].ampHat + 0.5 * c.ampDB
+                    if let qc = c.qFactor { tracks[i].qHat = tracks[i].qHat.map { 0.5 * $0 + 0.5 * qc } ?? qc }
+                    if let ac = c.alphaPerSec { tracks[i].alphaHat = tracks[i].alphaHat.map { 0.5 * $0 + 0.5 * ac } ?? ac }
+                    tracks[i].lastSweep = sweepIdx
+                    tracks[i].observations.append(c)
+                }
+            }
+
+            for j in 0..<nC where !matchedCand.contains(j) {
+                let c = cands[j]
+                tracks.append(
+                    ActiveTrack(
+                        trackID: nextID,
+                        birthSweep: sweepIdx,
+                        fInit: c.freqHz,
+                        lastSweep: sweepIdx,
+                        fHat: c.freqHz,
+                        vHat: 0.0,
+                        ampHat: c.ampDB,
+                        qHat: c.qFactor,
+                        alphaHat: c.alphaPerSec,
+                        observations: [c]
+                    )
+                )
+                nextID += 1
+            }
+        }
+
+        let minCount = max(1, Int(ceil(persistenceFraction * Double(sweeps.count))))
+        let qualified = tracks.filter { $0.observations.count >= minCount }
+        let topStrength = qualified.sorted {
+            (median($0.observations.map(\.ampDB)) ?? -120.0) > (median($1.observations.map(\.ampDB)) ?? -120.0)
+        }
+        let selected = Array(topStrength.prefix(4)).sorted {
+            if $0.birthSweep != $1.birthSweep { return $0.birthSweep < $1.birthSweep }
+            return $0.fInit < $1.fInit
+        }
+
+        var fOut: [Double?] = [nil, nil, nil, nil]
+        var fMask: [Int] = [0, 0, 0, 0]
+        var qOut: [Double?] = [nil, nil, nil, nil]
+        var qMask: [Int] = [0, 0, 0, 0]
+        var aOut: [Double?] = [nil, nil, nil, nil]
+        var aDBOut: [Double?] = [nil, nil, nil, nil]
+        var aR2Out: [Double?] = [nil, nil, nil, nil]
+        var aMask: [Int] = [0, 0, 0, 0]
+
+        for (slot, tr) in selected.enumerated() where slot < 4 {
+            if let fm = median(tr.observations.map(\.freqHz)) {
+                fOut[slot] = fm
+                fMask[slot] = 1
+            }
+            let qs = tr.observations.compactMap(\.qFactor).filter(\.isFinite)
+            if let qm = median(qs) {
+                qOut[slot] = qm
+                qMask[slot] = 1
+            }
+            let alphas = tr.observations.compactMap(\.alphaPerSec).filter(\.isFinite)
+            if let am = median(alphas) {
+                aOut[slot] = am
+                aDBOut[slot] = (20.0 / log(10.0)) * am
+                aR2Out[slot] = median(tr.observations.compactMap(\.alphaRSquared).filter(\.isFinite))
+                aMask[slot] = 1
+            }
+        }
+
+        return ModalVector4(
+            frequenciesHz: fOut,
+            validityMask: fMask,
+            qualityFactorsQ: qOut,
+            qValidityMask: qMask,
+            decayAlphaPerSec: aOut,
+            decayDBPerSec: aDBOut,
+            decayRSquared: aR2Out,
+            decayValidityMask: aMask,
+            spectralAttenuationSlopeDBPerKHz: medianSlope,
+            bubbleScatter55to85DB: medianScatter,
+            latePreRollNoiseDBFS: medianLatePreRoll
+        )
+    }
+
+    private static func median(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let s = values.sorted()
+        let mid = s.count / 2
+        return (s.count % 2 != 0) ? s[mid] : 0.5 * (s[mid - 1] + s[mid])
+    }
+
+    private static func solveHungarian(costMatrix: [[Double]]) -> [Int] {
+        let nRows = costMatrix.count
+        guard nRows > 0 else { return [] }
+        let nCols = costMatrix[0].count
+        let n = max(nRows, nCols)
+        let padCost = 1e6
+        var a = Array(repeating: Array(repeating: 0.0, count: n + 1), count: n + 1)
+        for i in 1...n {
+            for j in 1...n {
+                a[i][j] = (i <= nRows && j <= nCols) ? costMatrix[i - 1][j - 1] : padCost
+            }
+        }
+        var u = Array(repeating: 0.0, count: n + 1)
+        var v = Array(repeating: 0.0, count: n + 1)
+        var p = Array(repeating: 0, count: n + 1)
+        var way = Array(repeating: 0, count: n + 1)
+
+        for i in 1...n {
+            p[0] = i
+            var j0 = 0
+            var minv = Array(repeating: Double.infinity, count: n + 1)
+            var used = Array(repeating: false, count: n + 1)
+            repeat {
+                used[j0] = true
+                let i0 = p[j0]
+                var delta = Double.infinity
+                var j1 = 0
+                for j in 1...n where !used[j] {
+                    let cur = a[i0][j] - u[i0] - v[j]
+                    if cur < minv[j] {
+                        minv[j] = cur
+                        way[j] = j0
+                    }
+                    if minv[j] < delta {
+                        delta = minv[j]
+                        j1 = j
+                    }
+                }
+                for j in 0...n {
+                    if used[j] {
+                        u[p[j]] += delta
+                        v[j] -= delta
+                    } else {
+                        minv[j] -= delta
+                    }
+                }
+                j0 = j1
+            } while p[j0] != 0
+
+            repeat {
+                let j1 = way[j0]
+                p[j0] = p[j1]
+                j0 = j1
+            } while j0 != 0
+        }
+
+        var rowToCol = Array(repeating: -1, count: nRows)
+        for j in 1...nCols where p[j] >= 1 && p[j] <= nRows {
+            rowToCol[p[j] - 1] = j - 1
+        }
+        return rowToCol
     }
 }
