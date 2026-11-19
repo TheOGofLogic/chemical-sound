@@ -369,6 +369,7 @@ public final class CameraTargetingService: ObservableObject {
     @Published public private(set) var aimInstructionText: String = "Aim at the liquid"
     @Published public private(set) var isOpticsLocked: Bool = false
 
+    public var isAutoScanEnabled: Bool = false
     public var onAutoTargetLocked: (() -> Void)?
 
     #if os(iOS)
@@ -382,10 +383,20 @@ public final class CameraTargetingService: ObservableObject {
                 guard let self else { return }
                 self.targetLockProgress = progress
                 if didLock {
-                    self.aimInstructionText = "Target Steady — Scanning..."
-                    self.onAutoTargetLocked?()
+                    if self.isAutoScanEnabled {
+                        self.aimInstructionText = "Target Steady — Scanning..."
+                        self.onAutoTargetLocked?()
+                    } else {
+                        self.aimInstructionText = "Target Steady • Tap RUN R1 (20x) or SCAN"
+                    }
+                } else if progress >= 0.65 {
+                    self.aimInstructionText = self.isAutoScanEnabled
+                        ? "Hold steady — locking target..."
+                        : "Target Steady • Ready for R1 (20x)"
                 } else if progress >= 0.25 {
-                    self.aimInstructionText = "Hold steady — locking target..."
+                    self.aimInstructionText = self.isAutoScanEnabled
+                        ? "Hold steady — locking target..."
+                        : "Center container in reticle"
                 } else {
                     self.aimInstructionText = "Aim at the liquid"
                 }
@@ -444,20 +455,15 @@ public final class CameraTargetingService: ObservableObject {
             )
         }
 
-        let adjusting: Bool
-        #if os(iOS)
-        adjusting = worker.currentHardwareAdjusting()
-        #else
-        adjusting = false
-        #endif
-
         let opticsState: String
         if isOpticsLocked {
             opticsState = "LOCKED"
-        } else if adjusting {
-            opticsState = "UNLOCKED_ADJUSTING"
         } else {
+            #if os(iOS)
+            opticsState = worker.currentHardwareAdjusting() ? "UNLOCKED_ADJUSTING" : "UNLOCKED_SETTLED"
+            #else
             opticsState = "UNLOCKED_SETTLED"
+            #endif
         }
 
         let targetState: String

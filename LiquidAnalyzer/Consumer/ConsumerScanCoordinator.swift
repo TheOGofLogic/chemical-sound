@@ -58,7 +58,11 @@ public final class ConsumerScanCoordinator: ObservableObject {
     @Published public private(set) var history: [ConsumerScanItem] = []
     @Published public private(set) var calibratedPrototypes: [CalibratedAcousticPrototype] = []
     @Published public var autoPlayTunePreview: Bool = true
-    @Published public var autoScanWhenSteady: Bool = true
+    @Published public var autoScanWhenSteady: Bool = false {
+        didSet {
+            cameraService.isAutoScanEnabled = autoScanWhenSteady
+        }
+    }
     @Published public var hapticsEnabled: Bool = true
     @Published public var selectedGeometryCondition: GeometryTestCondition = .stationary15InBaseline
     @Published public var selectedControlSeriesTag: ControlSeriesTag = .unlabeledBlind
@@ -86,6 +90,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
     ) {
         self.researchCoordinator = researchCoordinator
         let resolvedCam = cameraService ?? CameraTargetingService()
+        resolvedCam.isAutoScanEnabled = false
         self.cameraService = resolvedCam
         self.tunePlayer = tunePlayer ?? ChemicalTunePlayer()
         self.classifier = classifier
@@ -175,6 +180,10 @@ public final class ConsumerScanCoordinator: ObservableObject {
 
         activeScanTask = Task { [weak self] in
             guard let self else { return }
+            if !self.cameraService.isCameraLive {
+                self.cameraService.startCamera(graceDelaySeconds: 10.0)
+                try? await self.researchCoordinator.timing.sleepMilliseconds(800)
+            }
             _ = await self.cameraService.lockOpticsForControlledBatchIfLive()
             let thumbnailData = self.cameraService.latestTargetingThumbnail()
             let sceneContextData = self.cameraService.latestSceneContextJPEG()

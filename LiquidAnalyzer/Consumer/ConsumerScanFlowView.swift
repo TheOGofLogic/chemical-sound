@@ -164,6 +164,124 @@ public struct ConsumerScanFlowView: View {
                 .buttonStyle(.plain)
                 .padding(.horizontal, 18)
 
+                // Dedicated Repeatability Gate R1 (20x) & Control A-G Card (Visible directly on Home!)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Label("Repeatability Gate R1 (20×)", systemImage: "repeat.circle.fill")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(Color(red: 0.06, green: 0.16, blue: 0.32))
+                        Spacer()
+                        Text(coordinator.autoScanWhenSteady ? "Auto-Scan ON" : "Auto-Scan OFF")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(coordinator.autoScanWhenSteady ? LiquidAnalyzerPalette.compositionOrange : LiquidAnalyzerPalette.resultGreenStart)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill((coordinator.autoScanWhenSteady ? LiquidAnalyzerPalette.compositionOrange : LiquidAnalyzerPalette.resultGreenStart).opacity(0.14))
+                            )
+                    }
+
+                    HStack(spacing: 8) {
+                        Menu {
+                            ForEach(ControlSeriesTag.allCases, id: \.rawValue) { tag in
+                                Button {
+                                    coordinator.selectedControlSeriesTag = tag
+                                } label: {
+                                    if coordinator.selectedControlSeriesTag == tag {
+                                        Label(tag.displayLabel, systemImage: "checkmark")
+                                    } else {
+                                        Text(tag.displayLabel)
+                                    }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "tag.fill")
+                                Text(coordinator.selectedControlSeriesTag.displayLabel)
+                                    .lineLimit(1)
+                                Spacer(minLength: 2)
+                                Image(systemName: "chevron.up.chevron.down")
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.10))
+                            )
+                        }
+
+                        Menu {
+                            ForEach(GeometryTestCondition.allCases, id: \.rawValue) { cond in
+                                Button {
+                                    coordinator.selectedGeometryCondition = cond
+                                } label: {
+                                    if coordinator.selectedGeometryCondition == cond {
+                                        Label(cond.displayLabel, systemImage: "checkmark")
+                                    } else {
+                                        Text(cond.displayLabel)
+                                    }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "ruler")
+                                Text(coordinator.selectedGeometryCondition.displayLabel)
+                                    .lineLimit(1)
+                                Spacer(minLength: 2)
+                                Image(systemName: "chevron.up.chevron.down")
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.10))
+                            )
+                        }
+                    }
+
+                    Toggle("Auto-Scan When Held Steady", isOn: $coordinator.autoScanWhenSteady)
+                        .font(.caption.weight(.semibold))
+
+                    Button(action: {
+                        coordinator.startRepeatabilityGateR1Batch(count: 20)
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "repeat.circle.fill")
+                                .font(.system(size: 18, weight: .bold))
+                            Text("RUN R1 (20×) BATCH")
+                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [LiquidAnalyzerPalette.resultGreenStart, LiquidAnalyzerPalette.scanBlue],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.white)
+                        .shadow(color: Color.black.opacity(0.06), radius: 10, y: 4)
+                )
+                .padding(.horizontal, 18)
+
                 // 2x2 Pastel Feature Grid (Matches Bottom of Poster)
                 LazyVGrid(
                     columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
@@ -244,7 +362,7 @@ public struct ConsumerScanFlowView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 4)
-                .padding(.bottom, 22)
+                .padding(.bottom, 84)
             }
         }
         .background(
@@ -349,20 +467,27 @@ public struct ConsumerScanFlowView: View {
                     endPoint: .bottom
                 )
 
-                VStack(spacing: 12) {
+                VStack(spacing: 8) {
                     HStack(spacing: 8) {
                         Button(action: {
-                            coordinator.startRepeatabilityGateR1Batch(count: 20)
+                            coordinator.autoScanWhenSteady.toggle()
                         }) {
-                            Label("Run R1 (20x)", systemImage: "repeat.circle.fill")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 13)
-                                .padding(.vertical, 8)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.88))
-                                )
+                            Label(
+                                coordinator.autoScanWhenSteady ? "Auto-Scan: ON" : "Auto-Scan: OFF",
+                                systemImage: coordinator.autoScanWhenSteady ? "bolt.circle.fill" : "hand.raised.fill"
+                            )
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 7)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(
+                                        coordinator.autoScanWhenSteady
+                                            ? LiquidAnalyzerPalette.compositionOrange.opacity(0.90)
+                                            : Color.black.opacity(0.65)
+                                    )
+                            )
                         }
                         .buttonStyle(.plain)
 
@@ -375,22 +500,22 @@ public struct ConsumerScanFlowView: View {
                                 cameraService.isOpticsLocked ? "AE/AF/WB Locked" : "Lock AE/AF/WB",
                                 systemImage: cameraService.isOpticsLocked ? "lock.fill" : "lock.open"
                             )
-                            .font(.caption.weight(.semibold))
+                            .font(.caption2.weight(.bold))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 7)
                             .background(
                                 Capsule(style: .continuous)
                                     .fill(
                                         cameraService.isOpticsLocked
                                             ? LiquidAnalyzerPalette.resultGreenStart.opacity(0.90)
-                                            : Color.black.opacity(0.56)
+                                            : Color.black.opacity(0.65)
                                     )
                             )
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.top, 10)
+                    .padding(.top, 8)
 
                     // Controlled Geometry & Blind Audit Series Tag (never passed to classifier)
                     HStack(spacing: 8) {
@@ -410,11 +535,12 @@ public struct ConsumerScanFlowView: View {
                             Label(coordinator.selectedGeometryCondition.displayLabel, systemImage: "ruler")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.white)
-                                .padding(.horizontal, 11)
+                                .lineLimit(1)
+                                .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .background(
                                     Capsule(style: .continuous)
-                                        .fill(Color.black.opacity(0.58))
+                                        .fill(Color.black.opacity(0.62))
                                 )
                         }
 
@@ -436,83 +562,110 @@ public struct ConsumerScanFlowView: View {
                             Label(coordinator.selectedControlSeriesTag.displayLabel, systemImage: "tag")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.white)
-                                .padding(.horizontal, 11)
+                                .lineLimit(1)
+                                .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .background(
                                     Capsule(style: .continuous)
-                                        .fill(Color.black.opacity(0.58))
+                                        .fill(Color.black.opacity(0.62))
                                 )
                         }
                     }
 
-                    Spacer(minLength: 6)
+                    Spacer(minLength: 4)
 
-                    // Live targeting reticle turns Emerald-Cyan as user holds steady on liquid
+                    // Compact targeting reticle fits cleanly on both iPhone and iPad compatibility viewports
                     TargetingReticleView(lockProgress: cameraService.targetLockProgress)
-                        .frame(width: 228, height: 248)
+                        .frame(width: 158, height: 170)
 
-                    // Dynamic instruction pill ("Aim at the liquid" -> "Hold steady..." -> Auto-scans!)
                     HStack(spacing: 8) {
-                        if cameraService.targetLockProgress >= 0.25 {
+                        if cameraService.targetLockProgress >= 0.25 && coordinator.autoScanWhenSteady {
                             ProgressView()
                                 .tint(.white)
                                 .scaleEffect(0.8)
                         }
                         Text(cameraService.aimInstructionText)
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
                             .foregroundStyle(.white)
+                            .lineLimit(1)
                     }
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 11)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 9)
                     .background(
                         Capsule(style: .continuous)
                             .fill(
-                                cameraService.targetLockProgress >= 0.25
+                                cameraService.targetLockProgress >= 0.50
                                     ? LiquidAnalyzerPalette.resultGreenStart.opacity(0.86)
                                     : Color.black.opacity(0.64)
                             )
                     )
                     .animation(.easeInOut(duration: 0.18), value: cameraService.aimInstructionText)
 
-                    Spacer()
+                    Spacer(minLength: 4)
 
-                    // Manual one-tap SCAN button (can also tap immediately without waiting for auto-lock)
-                    Button(action: {
-                        coordinator.beginScan()
-                    }) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "waveform")
-                                .font(.system(size: 20, weight: .bold))
-                            Text("SCAN NOW")
-                                .font(.system(size: 19, weight: .bold, design: .rounded))
-                                .tracking(0.8)
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: 280)
-                        .padding(.vertical, 16)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            LiquidAnalyzerPalette.scanBlue,
-                                            LiquidAnalyzerPalette.scanCyan
-                                        ],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
+                    // Side-by-side SCAN 1x and RUN R1 (20x) buttons seated cleanly above the floating tab bar
+                    HStack(spacing: 10) {
+                        Button(action: {
+                            coordinator.beginScan()
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "waveform")
+                                    .font(.system(size: 16, weight: .bold))
+                                Text("SCAN 1×")
+                                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                LiquidAnalyzerPalette.scanBlue,
+                                                LiquidAnalyzerPalette.scanCyan
+                                            ],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
                                     )
-                                )
-                        )
-                        .shadow(color: LiquidAnalyzerPalette.scanBlue.opacity(0.55), radius: 14, y: 5)
-                    }
-                    .buttonStyle(.plain)
+                            )
+                            .shadow(color: LiquidAnalyzerPalette.scanBlue.opacity(0.45), radius: 10, y: 4)
+                        }
+                        .buttonStyle(.plain)
 
-                    Text("Hold steady to auto-scan or tap SCAN NOW")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.88))
-                        .padding(.bottom, 16)
+                        Button(action: {
+                            coordinator.startRepeatabilityGateR1Batch(count: 20)
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "repeat.circle.fill")
+                                    .font(.system(size: 16, weight: .bold))
+                                Text("RUN R1 (20×)")
+                                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                LiquidAnalyzerPalette.resultGreenStart,
+                                                LiquidAnalyzerPalette.scanBlue
+                                            ],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                            )
+                            .shadow(color: LiquidAnalyzerPalette.resultGreenStart.opacity(0.45), radius: 10, y: 4)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.bottom, 76)
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 16)
             }
         }
     }
@@ -769,13 +922,64 @@ public struct ConsumerScanFlowView: View {
                             }
 
                             VStack(spacing: 10) {
+                                // Direct R1 (20x) Batch launcher right on the Result screen
+                                VStack(spacing: 8) {
+                                    HStack(spacing: 8) {
+                                        Menu {
+                                            ForEach(ControlSeriesTag.allCases, id: \.rawValue) { tag in
+                                                Button {
+                                                    coordinator.selectedControlSeriesTag = tag
+                                                } label: {
+                                                    if coordinator.selectedControlSeriesTag == tag {
+                                                        Label(tag.displayLabel, systemImage: "checkmark")
+                                                    } else {
+                                                        Text(tag.displayLabel)
+                                                    }
+                                                }
+                                            }
+                                        } label: {
+                                            HStack(spacing: 5) {
+                                                Image(systemName: "tag.fill")
+                                                Text(coordinator.selectedControlSeriesTag.displayLabel)
+                                                    .lineLimit(1)
+                                                Spacer(minLength: 2)
+                                                Image(systemName: "chevron.up.chevron.down")
+                                            }
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 8)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.10))
+                                            )
+                                        }
+
+                                        Button(action: {
+                                            coordinator.startRepeatabilityGateR1Batch(count: 20)
+                                        }) {
+                                            Label("RUN R1 (20×)", systemImage: "repeat.circle.fill")
+                                                .font(.caption.weight(.bold))
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 14)
+                                                .padding(.vertical, 9)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                        .fill(LiquidAnalyzerPalette.resultGreenStart)
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.horizontal, 16)
+
                                 Button(action: {
                                     coordinator.resetToAim()
                                 }) {
                                     Label(
                                         (item.status == .unclearScan || item.status == .nonLiquidMaterial)
                                             ? "Aim at a Liquid & Scan Again"
-                                            : "Scan Another Liquid",
+                                            : "Open Camera (Auto-Scan OFF)",
                                         systemImage: "camera.viewfinder"
                                     )
                                     .font(.subheadline.weight(.semibold))
@@ -809,7 +1013,7 @@ public struct ConsumerScanFlowView: View {
                     .shadow(color: Color.black.opacity(0.10), radius: 16, y: 6)
                     .padding(.horizontal, 16)
                     .padding(.top, 16)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 88)
                 }
             }
             .background(Color(red: 0.94, green: 0.96, blue: 0.99))
