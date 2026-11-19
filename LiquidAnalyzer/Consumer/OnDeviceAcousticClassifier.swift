@@ -1918,7 +1918,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let kMin = max(2, Int(ceil(1_100.0 / df)))
         let kMax = min(halfBins - 3, Int(floor(5_500.0 / df)))
         let flankBins = max(3, Int(round(250.0 / df)))
-        let minSepBins = max(2, Int(round(75.0 / df)))
+        let minSepBins = max(2, Int(round(150.0 / df)))
 
         struct RawModeCand {
             let bin: Int
@@ -1966,8 +1966,11 @@ public struct OnDeviceAcousticClassifier: Sendable {
         }
 
         rawPeaks.sort { $0.peakPower > $1.peakPower }
+        let maxPeakPow = rawPeaks.first?.peakPower ?? 0.0
+        // Reject finite-window truncation sinc sidelobes (<= -19 dB) while preserving real multi-mode resonances
+        let sidelobeFloorPower = maxPeakPow * pow(10.0, -14.0 / 10.0)
         var selected: [RawModeCand] = []
-        for p in rawPeaks {
+        for p in rawPeaks where p.peakPower >= sidelobeFloorPower {
             if selected.contains(where: { abs($0.bin - p.bin) < minSepBins }) { continue }
             selected.append(p)
             if selected.count >= 4 { break }
