@@ -743,6 +743,270 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertEqual(shiftMismatch.rejectionCode, "REJECTED_BASELINE_MISMATCH_GEOMETRY")
     }
 
+    func testR2C_BatchSteadyStateBaselinePurgesKCond2AndReconcilesDifferentialShifts() throws {
+        let geom = GeometryTestCondition.stationary15InBaseline.rawValue
+        let tune = ChemicalTuneProfile(
+            formulaDisplay: "Mode A",
+            mappingSummary: "Test",
+            baseFrequenciesHz: [261.63, 329.63, 392.0]
+        )
+
+        // Build 20x Empty Glass cohort where Sweeps 1..2 have transient outliers (1440 Hz) and Sweeps 3..20 are steady (2130 Hz)
+        var emptyBatch: [ConsumerScanItem] = []
+        for idx in 1...20 {
+            let isCond = idx <= 2
+            let f1 = isCond ? 1_440.0 : 2_130.0
+            let mv = ModalVector4(
+                frequenciesHz: [f1, 2_516.0, 2_846.0, 3_310.0],
+                validityMask: [1, 1, 1, 1],
+                qualityFactorsQ: [12.0, 13.0, 10.3, 30.0],
+                qValidityMask: [1, 1, 1, 1],
+                decayAlphaPerSec: [75.5, 90.7, 49.0, 56.1],
+                decayDBPerSec: [655.0, 788.0, 425.0, 487.0],
+                decayRSquared: [0.88, 0.85, 0.90, 0.86],
+                decayValidityMask: [1, 1, 1, 1],
+                spectralAttenuationSlopeDBPerKHz: 1.94,
+                bubbleScatter55to85DB: -9.8
+            )
+            let feat = ExtractedConsumerFeatures(
+                activeSNRDB: 32.0,
+                peakDBFS: -26.1,
+                clippedSamples: 0,
+                dominantPeakHz: isCond ? 1_440.0 : 2_529.0,
+                spectralCentroidHz: 3_775.0,
+                midToHighBandDB: 3.1,
+                decaySlopeDBPerSec: isCond ? 8_500.0 : 797.0,
+                highFreqBubbleScatterDB: -9.8,
+                subBandShapeDB: [0.4, 6.8, 2.1, 0.2, -3.9, -5.6],
+                echoReturnDB: -36.7,
+                tailSNRDB: 17.2,
+                preRollExcessHFDB: -4.5,
+                modalVector: mv
+            )
+            emptyBatch.append(
+                ConsumerScanItem(
+                    scanSequenceNumber: idx,
+                    batchRunID: "R1_20X_EMPTY",
+                    batchScanIndex: idx,
+                    batchTotalCount: 20,
+                    geometryCondition: geom,
+                    status: .unmatchedSignature,
+                    title: "Unmatched Liquid",
+                    formulaDisplay: "NO_VALIDATED_MATCH",
+                    statusBadgeText: "Ambiguity Gate R2",
+                    confidencePercent: nil,
+                    scientificNote: "Uncalibrated",
+                    constituents: [],
+                    tuneProfile: tune,
+                    measuredPeakHz: feat.dominantPeakHz,
+                    measuredCentroidHz: feat.spectralCentroidHz,
+                    measuredDecayDBPerSec: feat.decaySlopeDBPerSec,
+                    measuredFeatures: feat,
+                    isConditioningCycle: isCond
+                )
+            )
+        }
+
+        let aggEmpty = try XCTUnwrap(
+            BatchSteadyStateFeatureAggregator.aggregate(
+                items: emptyBatch,
+                targetID: CalibratedAcousticPrototype.emptyContainerTargetID
+            )
+        )
+        XCTAssertEqual(aggEmpty.steadyStateSweepCount, 18) // Strictly purged K_cond = 2 sweeps!
+        XCTAssertEqual(aggEmpty.features.dominantPeakHz, 2_529.0, accuracy: 0.1)
+        XCTAssertEqual(aggEmpty.features.modalVector?.frequenciesHz[0] ?? 0.0, 2_130.0, accuracy: 0.1)
+
+        let emptyProto = CalibratedAcousticPrototype(
+            targetID: CalibratedAcousticPrototype.emptyContainerTargetID,
+            features: aggEmpty.features,
+            geometryCondition: geom,
+            sourceBatchRunID: aggEmpty.batchRunID,
+            steadyStateSweepCount: aggEmpty.steadyStateSweepCount
+        )
+
+        // Now evaluate an uncalibrated Vinegar/loaded scan ([1724.4, 2155.1, 2494.9, 2892.3] Hz -> ~-19%..-12% shift vs Empty)
+        let loadedMV = ModalVector4(
+            frequenciesHz: [1_724.4, 2_155.1, 2_494.9, 2_892.3],
+            validityMask: [1, 1, 1, 1],
+            qualityFactorsQ: [13.9, 14.8, 22.4, 10.0],
+            qValidityMask: [1, 1, 1, 1],
+            decayAlphaPerSec: [84.8, 105.3, 33.6, 46.8],
+            decayDBPerSec: [736.0, 914.0, 292.0, 406.0],
+            decayRSquared: [0.84, 0.89, 0.91, 0.87],
+            decayValidityMask: [1, 1, 1, 1],
+            spectralAttenuationSlopeDBPerKHz: 1.34,
+            bubbleScatter55to85DB: -10.2
+        )
+        let loadedFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 33.3,
+            peakDBFS: -24.8,
+            clippedSamples: 0,
+            dominantPeakHz: 2_182.0,
+            spectralCentroidHz: 3_383.0,
+            midToHighBandDB: 4.5,
+            decaySlopeDBPerSec: 910.0,
+            highFreqBubbleScatterDB: -10.2,
+            subBandShapeDB: [4.6, 4.4, 5.8, -1.6, -5.8, -7.4],
+            echoReturnDB: -34.8,
+            tailSNRDB: 20.1,
+            preRollExcessHFDB: -6.5,
+            modalVector: loadedMV
+        )
+        let uncalibratedItem = ConsumerScanItem(
+            scanSequenceNumber: 215,
+            batchRunID: "R1_20X_LOADED",
+            batchScanIndex: 4,
+            batchTotalCount: 20,
+            geometryCondition: geom,
+            status: .unmatchedSignature,
+            title: "Unmatched Liquid",
+            formulaDisplay: "NO_VALIDATED_MATCH",
+            statusBadgeText: "Ambiguity Gate R2",
+            confidencePercent: nil,
+            scientificNote: "Uncalibrated",
+            constituents: [],
+            tuneProfile: tune,
+            measuredPeakHz: loadedFeat.dominantPeakHz,
+            measuredCentroidHz: loadedFeat.spectralCentroidHz,
+            measuredDecayDBPerSec: loadedFeat.decaySlopeDBPerSec,
+            measuredFeatures: loadedFeat,
+            isConditioningCycle: false
+        )
+
+        let classifier = OnDeviceAcousticClassifier()
+        let reconciled = classifier.reevaluateExistingItem(uncalibratedItem, calibratedPrototypes: [emptyProto])
+        XCTAssertEqual(reconciled.modeAScreeningState, .liquidLoaded)
+        XCTAssertEqual(reconciled.title, "Liquid Loaded (Unmatched Class)")
+        let de = try XCTUnwrap(reconciled.deltaEmptyBaseline)
+        XCTAssertTrue(de.compatible)
+        XCTAssertEqual(de.shiftMask, [1, 1, 1, 1])
+        XCTAssertEqual(de.relativeFrequencyShifts[0] ?? 0.0, (1_724.4 - 2_130.0) / 2_130.0, accuracy: 1e-4)
+    }
+
+    func testR2C_DifferentialBubbleScatterRequiresDeltaSHFAndActivePreRollFizz() {
+        let geom = GeometryTestCondition.stationary15InBaseline.rawValue
+        let emptyProto = CalibratedAcousticPrototype(
+            targetID: CalibratedAcousticPrototype.emptyContainerTargetID,
+            features: ExtractedConsumerFeatures(
+                activeSNRDB: 32.0, peakDBFS: -26.0, clippedSamples: 0,
+                dominantPeakHz: 2_529.0, spectralCentroidHz: 3_775.0,
+                midToHighBandDB: 3.0, decaySlopeDBPerSec: 797.0,
+                highFreqBubbleScatterDB: -7.5, preRollExcessHFDB: -4.5
+            ),
+            geometryCondition: geom
+        )
+        let waterProto = CalibratedAcousticPrototype(
+            targetID: CalibratedAcousticPrototype.waterReferenceTargetID,
+            features: ExtractedConsumerFeatures(
+                activeSNRDB: 33.0, peakDBFS: -25.0, clippedSamples: 0,
+                dominantPeakHz: 2_182.0, spectralCentroidHz: 3_383.0,
+                midToHighBandDB: 4.5, decaySlopeDBPerSec: 910.0,
+                highFreqBubbleScatterDB: -6.8, preRollExcessHFDB: -6.2
+            ),
+            geometryCondition: geom
+        )
+        let baselines = [emptyProto, waterProto]
+
+        // 1. Dry empty glass with elevated -4.56 dB ratio but quiet room pre-roll (-4.5 dB <= 0) -> FALSE
+        let dryEmptyWeakEcho = ExtractedConsumerFeatures(
+            activeSNRDB: 31.0, peakDBFS: -26.2, clippedSamples: 0,
+            dominantPeakHz: 2_527.0, spectralCentroidHz: 3_780.0,
+            midToHighBandDB: 2.8, decaySlopeDBPerSec: 800.0,
+            highFreqBubbleScatterDB: -4.56, preRollExcessHFDB: -4.5
+        )
+        XCTAssertFalse(OnDeviceAcousticClassifier.detectMicroBubbleScatter(features: dryEmptyWeakEcho))
+        XCTAssertFalse(
+            OnDeviceAcousticClassifier.detectMicroBubbleScatter(
+                features: dryEmptyWeakEcho,
+                geometryCondition: geom,
+                prototypes: baselines
+            )
+        )
+
+        // 2. Fizzing pre-roll (+2.2 dB > 0) but Delta S_HF = -5.0 - (-6.8) = +1.8 dB < +2.5 dB -> FALSE
+        let belowDeltaGate = ExtractedConsumerFeatures(
+            activeSNRDB: 34.0, peakDBFS: -25.0, clippedSamples: 0,
+            dominantPeakHz: 2_480.0, spectralCentroidHz: 3_820.0,
+            midToHighBandDB: 1.4, decaySlopeDBPerSec: 640.0,
+            highFreqBubbleScatterDB: -5.0, preRollExcessHFDB: 2.2
+        )
+        XCTAssertEqual(
+            OnDeviceAcousticClassifier.computeDifferentialBubbleScatterDB(
+                features: belowDeltaGate,
+                geometryCondition: geom,
+                prototypes: baselines
+            ) ?? 0.0,
+            1.8,
+            accuracy: 1e-6
+        )
+        XCTAssertFalse(
+            OnDeviceAcousticClassifier.detectMicroBubbleScatter(
+                features: belowDeltaGate,
+                geometryCondition: geom,
+                prototypes: baselines
+            )
+        )
+
+        // 3. Active effervescence: preRollExcessHFDB = +3.1 dB > 0 AND Delta S_HF = -3.4 - (-6.8) = +3.4 dB >= +2.5 dB -> TRUE
+        let activeFizz = ExtractedConsumerFeatures(
+            activeSNRDB: 35.0, peakDBFS: -24.5, clippedSamples: 0,
+            dominantPeakHz: 2_480.0, spectralCentroidHz: 3_880.0,
+            midToHighBandDB: 1.1, decaySlopeDBPerSec: 620.0,
+            highFreqBubbleScatterDB: -3.4, preRollExcessHFDB: 3.1
+        )
+        XCTAssertTrue(
+            OnDeviceAcousticClassifier.detectMicroBubbleScatter(
+                features: activeFizz,
+                geometryCondition: geom,
+                prototypes: baselines
+            )
+        )
+    }
+
+    func testR2C_LogRatioDecayNormalizationPreventsDiagnosticDistanceExplosion() {
+        let classifier = OnDeviceAcousticClassifier()
+        // High-rate Schroeder EDC decay (2,955 dB/s from live Build 13 iPhone Duo scan)
+        let highRateScan = ExtractedConsumerFeatures(
+            activeSNRDB: 35.5,
+            peakDBFS: -23.1,
+            clippedSamples: 0,
+            dominantPeakHz: 3_497.0,
+            spectralCentroidHz: 3_703.0,
+            midToHighBandDB: 2.1,
+            decaySlopeDBPerSec: 2_955.0,
+            highFreqBubbleScatterDB: -9.5
+        )
+        let scored = classifier.computeFrozenCandidateDistances(
+            profiles: ReferenceLiquidProfile.provisionalLibrary,
+            features: highRateScan
+        )
+        let bestDist = scored.first?.distance ?? 999.0
+        // Under Build 13 linear /38 scaling, bestDist exploded to ~28.1; log-ratio keeps diagnostic distances bounded < 3.6
+        XCTAssertLessThan(bestDist, 3.6)
+    }
+
+    @MainActor
+    func testR2C_CameraTargetingServicePurgesStaleThumbnailOnStopAndStart() {
+        let cam = CameraTargetingService()
+        #if !os(iOS)
+        let fakeOilJPEG = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0x02])
+        cam.injectSimulatedLiveFrameForTesting(thumbnail: fakeOilJPEG)
+        XCTAssertTrue(cam.isCameraLive)
+        XCTAssertEqual(cam.latestTargetingThumbnail(), fakeOilJPEG)
+        #endif
+
+        // Stopping camera after Run 5 must immediately clear isCameraLive and purge cached JPEG frames
+        cam.stopCamera()
+        XCTAssertFalse(cam.isCameraLive)
+        XCTAssertNil(cam.latestTargetingThumbnail())
+        XCTAssertNil(cam.latestSceneContextJPEG())
+
+        // Starting camera with graceDelaySeconds: 0.0 must also ensure no stale frame is present prior to fresh capture
+        cam.startCamera(graceDelaySeconds: 0.0)
+        XCTAssertNil(cam.latestTargetingThumbnail())
+    }
+
     // MARK: - Helpers
 
     private static func loadBundledESSAndInverse() throws -> (ess: [Float], inv: [Float]) {

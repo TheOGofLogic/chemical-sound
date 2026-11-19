@@ -111,7 +111,11 @@ public struct OnDeviceAcousticClassifier: Sendable {
             prototypes: calibratedPrototypes
         )
         let baselineMismatch = (deltaEmpty?.compatible == false) || (deltaWater?.compatible == false)
-        let bubbleDetected = Self.detectMicroBubbleScatter(features: features)
+        let bubbleDetected = Self.detectMicroBubbleScatter(
+            features: features,
+            geometryCondition: geometryCondition,
+            prototypes: calibratedPrototypes
+        )
         let resolvedOpticsState = aeAfWbLockState ?? (
             visual.hint == .audioOnly ? "HEADLESS" : (opticsLocked ? "LOCKED" : "UNLOCKED_CONTINUOUS")
         )
@@ -519,7 +523,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
         )
     }
 
-    private func computeFrozenCandidateDistances(
+    public func computeFrozenCandidateDistances(
         profiles: [ReferenceLiquidProfile],
         features: ExtractedConsumerFeatures
     ) -> [(profile: ReferenceLiquidProfile, distance: Double)] {
@@ -527,7 +531,9 @@ public struct OnDeviceAcousticClassifier: Sendable {
             let dPeak = (features.dominantPeakHz - prof.expectedPeakHz) / 580.0
             let dCent = (features.spectralCentroidHz - prof.expectedCentroidHz) / 650.0
             let dBand = (features.midToHighBandDB - prof.expectedMidToHighDB) / 3.8
-            let dDecay = (features.decaySlopeDBPerSec - prof.expectedDecayDBPerSec) / 38.0
+            // Phase R2-C (`LA-R2-C-PLAN-001` Sec. 2.3): Log-ratio decay normalization prevents diagnostic distances
+            // from ballooning (d = 6.9..118.1) against unclamped Schroeder EDC decay rates while preserving R1 margins
+            let dDecay = abs(log(max(1.0, features.decaySlopeDBPerSec) / max(1.0, prof.expectedDecayDBPerSec))) / 0.42
             let dScatter = (features.highFreqBubbleScatterDB - prof.expectedHighScatterDB) / 3.2
             let rawDist = sqrt(
                 0.26 * dPeak * dPeak +
@@ -572,7 +578,35 @@ public struct OnDeviceAcousticClassifier: Sendable {
             0.12 * dCavity * dCavity +
             0.12 * dEcho * dEcho
 
-        let acousticSq = 0.55 * subBandSq + 0.45 * macroSq
+        let baseAcousticSq = 0.55 * subBandSq + 0.45 * macroSq
+        let modalSq: Double? = {
+            guard let mvA = a.modalVector, let mvB = b.modalVector else { return nil }
+            var shifts: [Double] = []
+            var usedB = Set<Int>()
+            for i in 0..<4 where mvA.validityMask[i] == 1 {
+                guard let fs = mvA.frequenciesHz[i], fs > 0 else { continue }
+                var bestJ: Int?
+                var bestAbs = Double.infinity
+                for j in 0..<4 where !usedB.contains(j) && mvB.validityMask[j] == 1 {
+                    guard let fr = mvB.frequenciesHz[j], fr > 0 else { continue }
+                    let d = abs(fs - fr)
+                    if d <= max(450.0, 0.28 * fr) && d < bestAbs {
+                        bestAbs = d
+                        bestJ = j
+                    }
+                }
+                if let rIdx = bestJ, let fr = mvB.frequenciesHz[rIdx], fr > 0 {
+                    usedB.insert(rIdx)
+                    shifts.append(abs((fs - fr) / fr))
+                } else {
+                    shifts.append(0.12)
+                }
+            }
+            guard !shifts.isEmpty else { return nil }
+            let meanShift = shifts.reduce(0.0, +) / Double(shifts.count)
+            return pow(meanShift / 0.032, 2.0)
+        }()
+        let acousticSq = modalSq.map { 0.50 * baseAcousticSq + 0.50 * $0 } ?? baseAcousticSq
         guard includeOptics else {
             return sqrt(acousticSq)
         }
@@ -644,6 +678,242 @@ public struct OnDeviceAcousticClassifier: Sendable {
         return referenceLibrary.first(where: { $0.id == targetID })?.displayName ?? targetID
     }
 
+    /// Re-evaluates an existing persisted `ConsumerScanItem` against newly saved `CalibratedAcousticPrototype`s
+    /// without altering immutable raw measured features, timestamps, thumbnails, or sequence identifiers.
+    public func reevaluateExistingItem(
+        _ item: ConsumerScanItem,
+        calibratedPrototypes: [CalibratedAcousticPrototype]
+    ) -> ConsumerScanItem {
+        guard let features = item.measuredFeatures, item.status != .unclearScan else {
+            return item
+        }
+        let (deltaEmpty, deltaWater) = Self.computeBaselineShifts(
+            features: features,
+            geometryCondition: item.geometryCondition,
+            prototypes: calibratedPrototypes
+        )
+        let bubbleDetected = Self.detectMicroBubbleScatter(
+            features: features,
+            geometryCondition: item.geometryCondition,
+            prototypes: calibratedPrototypes
+        )
+        let fullLibraryScores = computeFrozenCandidateDistances(
+            profiles: referenceLibrary,
+            features: features
+        )
+        let allEntries = fullLibraryScores.map {
+            CandidateScoreEntry(profileID: $0.profile.id, displayName: $0.profile.displayName, distance: $0.distance)
+        }
+
+        if (deltaEmpty?.compatible == false) || (deltaWater?.compatible == false) {
+            let mismatchCode = deltaEmpty?.rejectionCode ?? deltaWater?.rejectionCode ?? "REJECTED_BASELINE_MISMATCH"
+            return ConsumerScanItem(
+                id: item.id,
+                scannedAt: item.scannedAt,
+                scanSequenceNumber: item.scanSequenceNumber,
+                batchRunID: item.batchRunID,
+                batchScanIndex: item.batchScanIndex,
+                batchTotalCount: item.batchTotalCount,
+                geometryCondition: item.geometryCondition,
+                controlSeriesTag: item.controlSeriesTag,
+                aeAfWbLockState: item.aeAfWbLockState,
+                targetLockState: item.targetLockState,
+                targetLockScore: item.targetLockScore,
+                gateDecision: "REJECTED_BASELINE_MISMATCH",
+                rejectionReason: mismatchCode,
+                status: .unmatchedSignature,
+                title: "Unmatched Liquid",
+                formulaDisplay: "Baseline Mismatch",
+                statusBadgeText: "MODE_A Screening • Baseline Mismatch",
+                confidencePercent: nil,
+                scientificNote: "Container geometry does not match the saved calibration baseline (\(mismatchCode)).",
+                constituents: [],
+                tuneProfile: item.tuneProfile,
+                measuredPeakHz: item.measuredPeakHz,
+                measuredCentroidHz: item.measuredCentroidHz,
+                measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+                measuredFeatures: features,
+                topCandidateName: allEntries.first?.displayName,
+                topCandidateDistance: allEntries.first?.distance,
+                runnerUpTitle: allEntries.dropFirst().first?.displayName,
+                secondCandidateDistance: allEntries.dropFirst().first?.distance,
+                winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
+                allCandidateDistances: allEntries,
+                thumbnailJPEGData: item.thumbnailJPEGData,
+                isConditioningCycle: item.isConditioningCycle,
+                conditioningTag: item.conditioningTag,
+                modeAScreeningState: .rejectedBaselineMismatch,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater
+            )
+        }
+
+        if let calibratedResult = matchCalibratedPrototypes(
+            features: features,
+            scanSequenceNumber: item.scanSequenceNumber,
+            batchRunID: item.batchRunID,
+            batchScanIndex: item.batchScanIndex,
+            batchTotalCount: item.batchTotalCount,
+            geometryCondition: item.geometryCondition,
+            controlSeriesTag: item.controlSeriesTag,
+            aeAfWbLockState: item.aeAfWbLockState,
+            targetLockState: item.targetLockState,
+            targetLockScore: item.targetLockScore,
+            hasOptics: item.thumbnailJPEGData != nil,
+            prototypes: calibratedPrototypes,
+            allFrozenEntries: allEntries,
+            thumbnailJPEGData: item.thumbnailJPEGData,
+            deltaEmpty: deltaEmpty,
+            deltaWater: deltaWater,
+            bubbleDetected: bubbleDetected
+        ) {
+            return ConsumerScanItem(
+                id: item.id,
+                scannedAt: item.scannedAt,
+                scanSequenceNumber: calibratedResult.scanSequenceNumber,
+                batchRunID: calibratedResult.batchRunID,
+                batchScanIndex: calibratedResult.batchScanIndex,
+                batchTotalCount: calibratedResult.batchTotalCount,
+                geometryCondition: calibratedResult.geometryCondition,
+                controlSeriesTag: calibratedResult.controlSeriesTag,
+                aeAfWbLockState: calibratedResult.aeAfWbLockState,
+                targetLockState: calibratedResult.targetLockState,
+                targetLockScore: calibratedResult.targetLockScore,
+                gateDecision: calibratedResult.gateDecision,
+                rejectionReason: calibratedResult.rejectionReason,
+                status: calibratedResult.status,
+                title: calibratedResult.title,
+                formulaDisplay: calibratedResult.formulaDisplay,
+                statusBadgeText: calibratedResult.statusBadgeText,
+                confidencePercent: calibratedResult.confidencePercent,
+                scientificNote: calibratedResult.scientificNote,
+                constituents: calibratedResult.constituents,
+                tuneProfile: calibratedResult.tuneProfile,
+                measuredPeakHz: calibratedResult.measuredPeakHz,
+                measuredCentroidHz: calibratedResult.measuredCentroidHz,
+                measuredDecayDBPerSec: calibratedResult.measuredDecayDBPerSec,
+                measuredFeatures: features,
+                topCandidateName: calibratedResult.topCandidateName,
+                topCandidateDistance: calibratedResult.topCandidateDistance,
+                runnerUpTitle: calibratedResult.runnerUpTitle,
+                runnerUpSimilarityPercent: calibratedResult.runnerUpSimilarityPercent,
+                secondCandidateDistance: calibratedResult.secondCandidateDistance,
+                winningMargin: calibratedResult.winningMargin,
+                allCandidateDistances: calibratedResult.allCandidateDistances,
+                thumbnailJPEGData: item.thumbnailJPEGData,
+                isConditioningCycle: item.isConditioningCycle,
+                conditioningTag: item.conditioningTag,
+                modeAScreeningState: calibratedResult.modeAScreeningState,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater
+            )
+        }
+
+        if let de = deltaEmpty, de.compatible {
+            let validShifts = de.relativeFrequencyShifts.compactMap { $0 }.map { abs($0) }
+            if let maxShift = validShifts.max(), maxShift >= 0.012 {
+                let resolvedScreening: ModeAScreeningState = bubbleDetected ? .bubbleScatterDetected : .liquidLoaded
+                let badge = bubbleDetected
+                    ? "MODE_A Screening • Bubble Scatter Detected"
+                    : "MODE_A Screening • Liquid Loaded"
+                let titleText = bubbleDetected ? "Bubble-Active Liquid" : "Liquid Loaded (Unmatched Class)"
+                let waterShiftNote: String = {
+                    guard let dw = deltaWater, dw.compatible else { return "" }
+                    let ws = dw.relativeFrequencyShifts.compactMap { $0 }.map { String(format: "%+.1f%%", $0 * 100.0) }
+                    return ws.isEmpty ? "" : "; Δf/f_water = [\(ws.joined(separator: ", "))]"
+                }()
+                let noteText = String(
+                    format: "Calibrated container shift detected (max |Δf/f_empty| = %.2f%%%@%@). No uncalibrated molecular or viscosity claim is asserted.",
+                    maxShift * 100.0,
+                    waterShiftNote,
+                    bubbleDetected ? "; micro-bubble scatter detected" : ""
+                )
+                return ConsumerScanItem(
+                    id: item.id,
+                    scannedAt: item.scannedAt,
+                    scanSequenceNumber: item.scanSequenceNumber,
+                    batchRunID: item.batchRunID,
+                    batchScanIndex: item.batchScanIndex,
+                    batchTotalCount: item.batchTotalCount,
+                    geometryCondition: item.geometryCondition,
+                    controlSeriesTag: item.controlSeriesTag,
+                    aeAfWbLockState: item.aeAfWbLockState,
+                    targetLockState: item.targetLockState,
+                    targetLockScore: item.targetLockScore,
+                    gateDecision: resolvedScreening.rawValue,
+                    rejectionReason: "UNCALIBRATED_CLASS_HELD",
+                    status: .unmatchedSignature,
+                    title: titleText,
+                    formulaDisplay: resolvedScreening.rawValue,
+                    statusBadgeText: badge,
+                    confidencePercent: nil,
+                    scientificNote: noteText,
+                    constituents: [],
+                    tuneProfile: item.tuneProfile,
+                    measuredPeakHz: item.measuredPeakHz,
+                    measuredCentroidHz: item.measuredCentroidHz,
+                    measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+                    measuredFeatures: features,
+                    topCandidateName: allEntries.first?.displayName,
+                    topCandidateDistance: allEntries.first?.distance,
+                    runnerUpTitle: allEntries.dropFirst().first?.displayName,
+                    secondCandidateDistance: allEntries.dropFirst().first?.distance,
+                    winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
+                    allCandidateDistances: allEntries,
+                    thumbnailJPEGData: item.thumbnailJPEGData,
+                    isConditioningCycle: item.isConditioningCycle,
+                    conditioningTag: item.conditioningTag,
+                    modeAScreeningState: resolvedScreening,
+                    deltaEmptyBaseline: deltaEmpty,
+                    deltaWaterBaseline: deltaWater
+                )
+            }
+        }
+
+        let screenState: ModeAScreeningState = bubbleDetected ? .bubbleScatterDetected : .noValidatedMatch
+        return ConsumerScanItem(
+            id: item.id,
+            scannedAt: item.scannedAt,
+            scanSequenceNumber: item.scanSequenceNumber,
+            batchRunID: item.batchRunID,
+            batchScanIndex: item.batchScanIndex,
+            batchTotalCount: item.batchTotalCount,
+            geometryCondition: item.geometryCondition,
+            controlSeriesTag: item.controlSeriesTag,
+            aeAfWbLockState: item.aeAfWbLockState,
+            targetLockState: item.targetLockState,
+            targetLockScore: item.targetLockScore,
+            gateDecision: bubbleDetected ? "MODE_A_BUBBLE_SCATTER_DETECTED" : "HELD_MODE_A_UNCALIBRATED_SCREENING",
+            rejectionReason: bubbleDetected
+                ? "BUBBLE_SCATTER_DETECTED: physical micro-bubble/effervescence scatter observed"
+                : "MODE_A_SCREENING_BOUNDARY: uncalibrated airborne reflection requires container baseline (Delta X_empty / Delta X_water)",
+            status: .unmatchedSignature,
+            title: "Unmatched Liquid",
+            formulaDisplay: screenState.rawValue,
+            statusBadgeText: bubbleDetected ? "MODE_A Screening • Bubble Scatter Detected" : "Ambiguity Gate R2 • No Forced Match",
+            confidencePercent: nil,
+            scientificNote: item.scientificNote,
+            constituents: [],
+            tuneProfile: item.tuneProfile,
+            measuredPeakHz: item.measuredPeakHz,
+            measuredCentroidHz: item.measuredCentroidHz,
+            measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+            measuredFeatures: features,
+            topCandidateName: allEntries.first?.displayName,
+            topCandidateDistance: allEntries.first?.distance,
+            runnerUpTitle: allEntries.dropFirst().first?.displayName,
+            secondCandidateDistance: allEntries.dropFirst().first?.distance,
+            winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
+            allCandidateDistances: allEntries,
+            thumbnailJPEGData: item.thumbnailJPEGData,
+            isConditioningCycle: item.isConditioningCycle,
+            conditioningTag: item.conditioningTag,
+            modeAScreeningState: screenState,
+            deltaEmptyBaseline: deltaEmpty,
+            deltaWaterBaseline: deltaWater
+        )
+    }
+
     private func matchCalibratedPrototypes(
         features: ExtractedConsumerFeatures,
         scanSequenceNumber: Int?,
@@ -665,6 +935,9 @@ public struct OnDeviceAcousticClassifier: Sendable {
     ) -> ConsumerScanItem? {
         var grouped: [String: [ExtractedConsumerFeatures]] = [:]
         for proto in prototypes {
+            if let sg = geometryCondition, let pg = proto.geometryCondition, !sg.isEmpty, !pg.isEmpty, sg != pg {
+                continue
+            }
             grouped[proto.targetID, default: []].append(proto.features)
         }
 
@@ -718,6 +991,16 @@ public struct OnDeviceAcousticClassifier: Sendable {
         }
 
         if bestTarget.targetID == CalibratedAcousticPrototype.emptyContainerTargetID {
+            // Never classify a container as Empty if its 4-mode vector exhibits a >= 2.2% mean mass-loading shift
+            if let de = deltaEmpty, de.compatible {
+                let validShifts = de.relativeFrequencyShifts.compactMap { $0 }.map { abs($0) }
+                if !validShifts.isEmpty {
+                    let meanShift = validShifts.reduce(0.0, +) / Double(validShifts.count)
+                    if meanShift >= 0.022 || (validShifts.max() ?? 0.0) >= 0.080 {
+                        return nil
+                    }
+                }
+            }
             return ConsumerScanItem(
                 scanSequenceNumber: scanSequenceNumber,
                 batchRunID: batchRunID,
@@ -1130,9 +1413,13 @@ public struct OnDeviceAcousticClassifier: Sendable {
                         ? (real2[b] * real2[b] + imag2[b] * imag2[b]) / wNorm2
                         : unitFull
                     let nf = noisePowerSpec[b]
-                    let cFull = max(unitFull * 0.04, unitFull - 1.45 * nf) * windowPowerScale
-                    let cEarly = max(unitEarly * 0.04, unitEarly - 1.45 * nf) * windowPowerScale
-                    let cSust = max(unitSust * 0.04, unitSust - 1.45 * nf) * windowPowerScale
+                    // Phase R2-C (`LA-R2-C-PLAN-001` Sec. 2.2): Strip the 4% residual floor from the [5.2-11.8 kHz]
+                    // high-frequency scatter window so weak-echo runs on dry glass do not integrate noise bins as scatter
+                    let binFreqHz = Double(b) * binHz
+                    let residualFloorFrac = (binFreqHz >= 5_200.0) ? 0.0 : 0.04
+                    let cFull = max(unitFull * residualFloorFrac, unitFull - 1.45 * nf) * windowPowerScale
+                    let cEarly = max(unitEarly * residualFloorFrac, unitEarly - 1.45 * nf) * windowPowerScale
+                    let cSust = max(unitSust * residualFloorFrac, unitSust - 1.45 * nf) * windowPowerScale
                     cleanP1[b] = cFull
                     cleanP2[b] = pow(max(0.0, cFull * cEarly * cSust), 1.0 / 3.0)
                     let hi = max(cEarly, cSust)
@@ -1578,11 +1865,63 @@ public struct OnDeviceAcousticClassifier: Sendable {
     /// Evaluates physical micro-bubble / effervescence backscatter (`BUBBLE_SCATTER_DETECTED`) using both
     /// reflected `[5.5-8.5] / [2.0-4.5] kHz` energy and active late-pre-roll high-frequency fizz excess,
     /// preventing bare empty plastic cups (quiet pre-roll) from false-triggering bubble detection.
-    public static func detectMicroBubbleScatter(features: ExtractedConsumerFeatures) -> Bool {
-        // `highFreqBubbleScatterDB` integrates speaker-compensated reflected [5.2-11.8]/[1.5-4.2] kHz scatter
-        // plus late-pre-roll high-frequency micro-bubble fizz excess, cleanly separating active bubble scatter
-        // from bare empty plastic containers (-9.4 to -10.4 dB) and non-effervescent liquids (<= -5.62 dB).
-        return features.highFreqBubbleScatterDB >= -5.58
+    /// Computes `Delta S_HF = S_HF_sample - max(S_HF_empty, S_HF_water)` against geometry-compatible calibrated baselines.
+    public static func computeDifferentialBubbleScatterDB(
+        features: ExtractedConsumerFeatures,
+        geometryCondition: String? = nil,
+        prototypes: [CalibratedAcousticPrototype] = []
+    ) -> Double? {
+        let compatible = prototypes.filter { proto in
+            guard proto.targetID == CalibratedAcousticPrototype.emptyContainerTargetID ||
+                    proto.targetID == CalibratedAcousticPrototype.waterReferenceTargetID else {
+                return false
+            }
+            if let sg = geometryCondition, let pg = proto.geometryCondition, !sg.isEmpty, !pg.isEmpty, sg != pg {
+                return false
+            }
+            return true
+        }
+        guard !compatible.isEmpty else { return nil }
+
+        func medianValue(_ arr: [Double]) -> Double? {
+            let finite = arr.filter(\.isFinite).sorted()
+            guard !finite.isEmpty else { return nil }
+            let m = finite.count / 2
+            return (finite.count % 2 != 0) ? finite[m] : 0.5 * (finite[m - 1] + finite[m])
+        }
+
+        let emptyMed = medianValue(
+            compatible
+                .filter { $0.targetID == CalibratedAcousticPrototype.emptyContainerTargetID }
+                .map(\.features.highFreqBubbleScatterDB)
+        )
+        let waterMed = medianValue(
+            compatible
+                .filter { $0.targetID == CalibratedAcousticPrototype.waterReferenceTargetID }
+                .map(\.features.highFreqBubbleScatterDB)
+        )
+        let refs = [emptyMed, waterMed].compactMap { $0 }
+        guard let maxRefSHF = refs.max() else { return nil }
+        return features.highFreqBubbleScatterDB - maxRefSHF
+    }
+
+    /// Phase R2-C (`LA-R2-C-PLAN-001` Sec. 2.2): Requires genuine positive pre-roll acoustic fizz (`preRollExcessHFDB > 0.0`)
+    /// AND differential scatter excess `Delta S_HF >= +2.5 dB` above `max(S_HF_empty, S_HF_water)` when calibrated
+    /// (or `highFreqBubbleScatterDB >= -3.0` when uncalibrated), eliminating false bubble triggers on dry containers.
+    public static func detectMicroBubbleScatter(
+        features: ExtractedConsumerFeatures,
+        geometryCondition: String? = nil,
+        prototypes: [CalibratedAcousticPrototype] = []
+    ) -> Bool {
+        guard features.preRollExcessHFDB > 0.0 else { return false }
+        if let deltaSHF = computeDifferentialBubbleScatterDB(
+            features: features,
+            geometryCondition: geometryCondition,
+            prototypes: prototypes
+        ) {
+            return deltaSHF >= 2.5
+        }
+        return features.highFreqBubbleScatterDB >= -3.0
     }
 
     /// Computes differential shift vectors (`Delta X_empty`, `Delta X_water`) against saved baseline prototypes.
@@ -1593,30 +1932,43 @@ public struct OnDeviceAcousticClassifier: Sendable {
     ) -> (deltaEmpty: DifferentialBaselineVector?, deltaWater: DifferentialBaselineVector?) {
         guard let sampleMV = features.modalVector else { return (nil, nil) }
 
-        let emptyProtos = prototypes.filter { $0.targetID == CalibratedAcousticPrototype.emptyContainerTargetID }
-        let waterProtos = prototypes.filter { $0.targetID == "H2O_DIST" }
+        let emptyAll = prototypes.filter { $0.targetID == CalibratedAcousticPrototype.emptyContainerTargetID }
+        let waterAll = prototypes.filter { $0.targetID == CalibratedAcousticPrototype.waterReferenceTargetID }
+
+        func pickGeometryMatched(_ all: [CalibratedAcousticPrototype]) -> (protos: [CalibratedAcousticPrototype], refGeom: String?) {
+            guard !all.isEmpty else { return ([], nil) }
+            if let sg = geometryCondition, !sg.isEmpty {
+                let exact = all.filter { ($0.geometryCondition ?? sg) == sg }
+                if !exact.isEmpty {
+                    return (exact, exact.first?.geometryCondition ?? sg)
+                }
+            }
+            return (all, all.first?.geometryCondition)
+        }
 
         let dEmpty: DifferentialBaselineVector? = {
-            guard !emptyProtos.isEmpty else { return nil }
-            let refMV = aggregatePrototypeModalVector(emptyProtos)
+            let picked = pickGeometryMatched(emptyAll)
+            guard !picked.protos.isEmpty else { return nil }
+            let refMV = aggregatePrototypeModalVector(picked.protos)
             return DifferentialBaselineVector.compute(
                 sample: sampleMV,
                 sampleGeometry: geometryCondition,
                 reference: refMV,
                 referenceTargetID: CalibratedAcousticPrototype.emptyContainerTargetID,
-                referenceGeometry: geometryCondition
+                referenceGeometry: picked.refGeom
             )
         }()
 
         let dWater: DifferentialBaselineVector? = {
-            guard !waterProtos.isEmpty else { return nil }
-            let refMV = aggregatePrototypeModalVector(waterProtos)
+            let picked = pickGeometryMatched(waterAll)
+            guard !picked.protos.isEmpty else { return nil }
+            let refMV = aggregatePrototypeModalVector(picked.protos)
             return DifferentialBaselineVector.compute(
                 sample: sampleMV,
                 sampleGeometry: geometryCondition,
                 reference: refMV,
-                referenceTargetID: "H2O_DIST",
-                referenceGeometry: geometryCondition
+                referenceTargetID: CalibratedAcousticPrototype.waterReferenceTargetID,
+                referenceGeometry: picked.refGeom
             )
         }()
 

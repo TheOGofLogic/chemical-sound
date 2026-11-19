@@ -187,7 +187,7 @@ public struct DifferentialBaselineVector: Codable, Equatable, Sendable {
             for j in 0..<4 where !usedRefSlots.contains(j) {
                 guard reference.validityMask[j] == 1, let fr = reference.frequenciesHz[j], fr > 0 else { continue }
                 let dist = abs(fs - fr)
-                let maxAllowed = max(250.0, 0.14 * fr)
+                let maxAllowed = max(450.0, 0.28 * fr)
                 if dist <= maxAllowed && dist < bestDist {
                     bestDist = dist
                     bestRefIdx = j
@@ -471,22 +471,47 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
 public struct CalibratedAcousticPrototype: Codable, Equatable, Identifiable, Sendable {
     public static let solidSurfaceTargetID = "SOLID_SURFACE"
     public static let emptyContainerTargetID = "EMPTY_CONTAINER"
+    public static let waterReferenceTargetID = "H2O_DIST"
 
     public let id: UUID
     public let createdAt: Date
     public let targetID: String
     public let features: ExtractedConsumerFeatures
+    public let geometryCondition: String?
+    public let sourceBatchRunID: String?
+    public let steadyStateSweepCount: Int?
 
     public init(
         id: UUID = UUID(),
         createdAt: Date = Date(),
         targetID: String,
-        features: ExtractedConsumerFeatures
+        features: ExtractedConsumerFeatures,
+        geometryCondition: String? = nil,
+        sourceBatchRunID: String? = nil,
+        steadyStateSweepCount: Int? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
         self.targetID = targetID
         self.features = features
+        self.geometryCondition = geometryCondition
+        self.sourceBatchRunID = sourceBatchRunID
+        self.steadyStateSweepCount = steadyStateSweepCount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, createdAt, targetID, features, geometryCondition, sourceBatchRunID, steadyStateSweepCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.targetID = try c.decode(String.self, forKey: .targetID)
+        self.features = try c.decode(ExtractedConsumerFeatures.self, forKey: .features)
+        self.geometryCondition = try c.decodeIfPresent(String.self, forKey: .geometryCondition)
+        self.sourceBatchRunID = try c.decodeIfPresent(String.self, forKey: .sourceBatchRunID)
+        self.steadyStateSweepCount = try c.decodeIfPresent(Int.self, forKey: .steadyStateSweepCount)
     }
 }
 
@@ -521,6 +546,20 @@ public final class CalibratedPrototypeStore: @unchecked Sendable {
 
     public func append(_ prototype: CalibratedAcousticPrototype) {
         var current = loadAll()
+        current.insert(prototype, at: 0)
+        if current.count > 120 {
+            current = Array(current.prefix(120))
+        }
+        saveAll(current)
+    }
+
+    /// Replaces any prior baseline sharing the same `(targetID, geometryCondition)` with the newly calibrated steady-state baseline.
+    public func upsertBaseline(_ prototype: CalibratedAcousticPrototype) {
+        var current = loadAll()
+        current.removeAll { existing in
+            existing.targetID == prototype.targetID &&
+                (existing.geometryCondition ?? "") == (prototype.geometryCondition ?? "")
+        }
         current.insert(prototype, at: 0)
         if current.count > 120 {
             current = Array(current.prefix(120))
@@ -1554,11 +1593,12 @@ public enum BatchModalVectorTracker {
     public static func aggregateSteadyStateModalVector(
         items: [ConsumerScanItem],
         purgeConditioningK2: Bool = true,
-        persistenceFraction: Double = 0.65
+        persistenceFraction: Double = 0.65,
+        allowNonLiquidSolid: Bool = false
     ) -> ModalVector4 {
         let ordered = items.sorted { ($0.batchScanIndex ?? 0) < ($1.batchScanIndex ?? 0) }
         let eligible = ordered.filter { item in
-            guard item.status != .unclearScan && item.status != .nonLiquidMaterial else { return false }
+            guard item.status != .unclearScan && (allowNonLiquidSolid || item.status != .nonLiquidMaterial) else { return false }
             if purgeConditioningK2 && item.isConditioningCycle { return false }
             return true
         }
@@ -1853,5 +1893,100 @@ public enum BatchModalVectorTracker {
             rowToCol[p[j] - 1] = j - 1
         }
         return rowToCol
+    }
+}
+
+/// Phase R2-C (`LA-R2-C-PLAN-001` Sec. 2.1): Steady-state (`Sweeps 3..20`, `K_cond = 2` purged) median feature aggregator
+/// for one-tap 20x batch baseline calibration (`EMPTY_CONTAINER`, `H2O_DIST`, `SOLID_SURFACE`, or reference liquid standards).
+public enum BatchSteadyStateFeatureAggregator {
+    public struct AggregatedBatchBaseline: Sendable, Equatable {
+        public let features: ExtractedConsumerFeatures
+        public let geometryCondition: String?
+        public let batchRunID: String?
+        public let steadyStateSweepCount: Int
+    }
+
+    public static func aggregate(
+        items: [ConsumerScanItem],
+        targetID: String
+    ) -> AggregatedBatchBaseline? {
+        let isSolidTarget = (targetID == CalibratedAcousticPrototype.solidSurfaceTargetID)
+        let ordered = items.sorted { ($0.batchScanIndex ?? 0) < ($1.batchScanIndex ?? 0) }
+        let validAll = ordered.filter { item in
+            guard item.measuredFeatures != nil, item.status != .unclearScan else { return false }
+            if !isSolidTarget && item.status == .nonLiquidMaterial { return false }
+            return true
+        }
+        guard !validAll.isEmpty else { return nil }
+
+        let purged = validAll.filter { !$0.isConditioningCycle }
+        let steadyItems = purged.isEmpty ? validAll : purged
+        let feats = steadyItems.compactMap(\.measuredFeatures)
+        guard let first = feats.first else { return nil }
+
+        func med(_ vals: [Double], fallback: Double = 0.0) -> Double {
+            let finite = vals.filter(\.isFinite).sorted()
+            guard !finite.isEmpty else { return fallback }
+            let m = finite.count / 2
+            return (finite.count % 2 != 0) ? finite[m] : 0.5 * (finite[m - 1] + finite[m])
+        }
+
+        let bandLen = first.subBandShapeDB.count
+        var medBands = [Double](repeating: 0.0, count: bandLen)
+        if bandLen > 0 {
+            for k in 0..<bandLen {
+                let col = feats.compactMap { k < $0.subBandShapeDB.count ? $0.subBandShapeDB[k] : nil }
+                medBands[k] = med(col)
+            }
+        }
+
+        let steadyMV = BatchModalVectorTracker.aggregateSteadyStateModalVector(
+            items: steadyItems,
+            purgeConditioningK2: false,
+            persistenceFraction: 0.50,
+            allowNonLiquidSolid: isSolidTarget
+        )
+
+        let aggFeatures = ExtractedConsumerFeatures(
+            activeSNRDB: med(feats.map(\.activeSNRDB), fallback: first.activeSNRDB),
+            activeRMSDBFS: med(feats.map(\.activeRMSDBFS), fallback: first.activeRMSDBFS),
+            peakDBFS: med(feats.map(\.peakDBFS), fallback: first.peakDBFS),
+            clippedSamples: 0,
+            dominantPeakHz: med(feats.map(\.dominantPeakHz), fallback: first.dominantPeakHz),
+            primaryPeakAmplitudeDB: med(feats.map(\.primaryPeakAmplitudeDB), fallback: first.primaryPeakAmplitudeDB),
+            secondaryPeaksHz: steadyMV.frequenciesHz.dropFirst().compactMap { $0 },
+            secondaryPeakAmplitudesDB: first.secondaryPeakAmplitudesDB,
+            spectralCentroidHz: med(feats.map(\.spectralCentroidHz), fallback: first.spectralCentroidHz),
+            midToHighBandDB: med(feats.map(\.midToHighBandDB), fallback: first.midToHighBandDB),
+            decaySlopeDBPerSec: med(feats.map(\.decaySlopeDBPerSec), fallback: first.decaySlopeDBPerSec),
+            highFreqBubbleScatterDB: med(feats.map(\.highFreqBubbleScatterDB), fallback: first.highFreqBubbleScatterDB),
+            spectralFlatness: med(feats.map(\.spectralFlatness), fallback: first.spectralFlatness),
+            peakProminenceDB: med(feats.map(\.peakProminenceDB), fallback: first.peakProminenceDB),
+            cavityMultipathDB: med(feats.map(\.cavityMultipathDB), fallback: first.cavityMultipathDB),
+            subBandShapeDB: medBands,
+            echoReturnDB: med(feats.map(\.echoReturnDB), fallback: first.echoReturnDB),
+            echoRMSDBFS: med(feats.map(\.echoRMSDBFS), fallback: first.echoRMSDBFS),
+            tailSNRDB: med(feats.map(\.tailSNRDB), fallback: first.tailSNRDB),
+            alignmentOffsetSamples: first.alignmentOffsetSamples,
+            echoArrivalDelayMs: med(feats.map(\.echoArrivalDelayMs), fallback: first.echoArrivalDelayMs),
+            intraScanPersistenceRatio: med(feats.map(\.intraScanPersistenceRatio), fallback: first.intraScanPersistenceRatio),
+            featureVectorChecksum: first.featureVectorChecksum,
+            opticalCenterBrightness: med(feats.map(\.opticalCenterBrightness), fallback: first.opticalCenterBrightness),
+            opticalInteriorContrast: med(feats.map(\.opticalInteriorContrast), fallback: first.opticalInteriorContrast),
+            opticalRimContrast: med(feats.map(\.opticalRimContrast), fallback: first.opticalRimContrast),
+            opticsLocked: feats.allSatisfy(\.opticsLocked),
+            latePreRollNoiseDBFS: med(feats.map(\.latePreRollNoiseDBFS), fallback: first.latePreRollNoiseDBFS),
+            preRollExcessHFDB: med(feats.map(\.preRollExcessHFDB), fallback: first.preRollExcessHFDB),
+            modalVector: steadyMV
+        )
+
+        let geom = steadyItems.first?.geometryCondition
+        let bID = steadyItems.first?.batchRunID
+        return AggregatedBatchBaseline(
+            features: aggFeatures,
+            geometryCondition: geom,
+            batchRunID: bID,
+            steadyStateSweepCount: steadyItems.count
+        )
     }
 }

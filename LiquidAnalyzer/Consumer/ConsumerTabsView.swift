@@ -185,6 +185,12 @@ public struct ConsumerHistoryView: View {
                                 RepeatabilityGateSummaryCard(
                                     items: cohort.items,
                                     copyStatusBanner: copyStatusBanner,
+                                    onSaveBatchBaseline: { targetID, targetLabel in
+                                        if let saved = coordinator.teachCalibratedBatchBaseline(items: cohort.items, targetID: targetID) {
+                                            let nSweeps = saved.steadyStateSweepCount ?? cohort.items.count
+                                            copyStatusBanner = "Saved \(targetLabel) baseline (\(nSweeps) steady-state sweeps) & updated shifts ✓"
+                                        }
+                                    },
                                     onSaveCohortToFiles: {
                                         _ = coordinator.exportRepeatabilityCSVURL(items: cohort.items, filenameSuffix: cohort.id)
                                         exporterDocument = CSVTextDocument(
@@ -408,6 +414,7 @@ public struct ConsumerHistoryView: View {
 private struct RepeatabilityGateSummaryCard: View {
     let items: [ConsumerScanItem]
     let copyStatusBanner: String?
+    let onSaveBatchBaseline: (String, String) -> Void
     let onSaveCohortToFiles: () -> Void
     let onCopyCohortCSV: () -> Void
     let onShareCohortCSV: () -> Void
@@ -477,6 +484,45 @@ private struct RepeatabilityGateSummaryCard: View {
                 }
             }
             VStack(spacing: 6) {
+                Menu {
+                    Button {
+                        onSaveBatchBaseline(CalibratedAcousticPrototype.emptyContainerTargetID, "Empty Container")
+                    } label: {
+                        Label("Empty Container Baseline (Sweeps 3–20)", systemImage: "cup.and.saucer")
+                    }
+                    Button {
+                        onSaveBatchBaseline(CalibratedAcousticPrototype.waterReferenceTargetID, "Water Reference")
+                    } label: {
+                        Label("Water Reference Baseline (Sweeps 3–20)", systemImage: "drop.fill")
+                    }
+                    Button {
+                        onSaveBatchBaseline(CalibratedAcousticPrototype.solidSurfaceTargetID, "Solid Surface")
+                    } label: {
+                        Label("Solid Surface Baseline (Sweeps 3–20)", systemImage: "cube.fill")
+                    }
+                    Divider()
+                    Menu("Known Liquid Standard (Sweeps 3–20)...") {
+                        ForEach(ReferenceLiquidProfile.provisionalLibrary) { profile in
+                            Button {
+                                onSaveBatchBaseline(profile.id, profile.displayName)
+                            } label: {
+                                Text("\(profile.displayName) (\(profile.formulaDisplay))")
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Save Steady-State (Sweeps 3–20) as Baseline", systemImage: "scope")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(LiquidAnalyzerPalette.resultGreenStart)
+                        )
+                }
+                .buttonStyle(.borderless)
+
                 Button(action: onSaveCohortToFiles) {
                     Label("Download / Save Cohort R1 CSV", systemImage: "arrow.down.doc.fill")
                         .font(.caption.weight(.bold))
@@ -766,7 +812,7 @@ public struct ConsumerMoreView: View {
 
                 Section("About") {
                     LabeledContent("Application", value: "Liquid Analyzer")
-                    LabeledContent("Version", value: "0.4.0 (Build 13 • R2-B MODE_A)")
+                    LabeledContent("Version", value: "0.4.1 (Build 14 • R2-C MODE_A)")
                 }
             }
             .navigationTitle("More")

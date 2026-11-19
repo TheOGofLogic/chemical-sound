@@ -57,6 +57,10 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         onStatusUpdate: @escaping @Sendable (Bool) -> Void
     ) {
         frameLock.lock()
+        cachedThumbnailJPEG = nil
+        cachedSceneContextJPEG = nil
+        lastThumbnailUptime = 0
+        lastAnalysisUptime = 0
         previousLumaGrid = nil
         steadyScore = 0.0
         didFireLockForCurrentSession = false
@@ -119,7 +123,19 @@ private final class CameraSessionWorker: NSObject, AVCaptureVideoDataOutputSampl
         }
     }
 
+    func clearCachedFrames() {
+        frameLock.lock()
+        cachedThumbnailJPEG = nil
+        cachedSceneContextJPEG = nil
+        lastThumbnailUptime = 0
+        lastAnalysisUptime = 0
+        previousLumaGrid = nil
+        steadyScore = 0.0
+        frameLock.unlock()
+    }
+
     func stop() {
+        clearCachedFrames()
         sessionQueue.async { [weak self] in
             guard let self, self.session.isRunning else { return }
             self.session.stopRunning()
@@ -374,6 +390,9 @@ public final class CameraTargetingService: ObservableObject {
 
     #if os(iOS)
     private let worker = CameraSessionWorker()
+    #else
+    private var simulatedThumbnailJPEG: Data?
+    private var simulatedSceneContextJPEG: Data?
     #endif
 
     public init() {
@@ -405,8 +424,28 @@ public final class CameraTargetingService: ObservableObject {
         #endif
     }
 
-    public func startCamera(graceDelaySeconds: Double = 0.8) {
+    /// Explicitly purges any cached targeting or scene-context JPEG buffers so a subsequent scan can never inherit a prior run's image.
+    public func clearCachedFrames() {
         targetLockProgress = 0.0
+        #if os(iOS)
+        worker.clearCachedFrames()
+        #else
+        simulatedThumbnailJPEG = nil
+        simulatedSceneContextJPEG = nil
+        #endif
+    }
+
+    #if !os(iOS)
+    /// Headless unit-test hook for verifying stale-frame purge semantics on macOS test runners.
+    public func injectSimulatedLiveFrameForTesting(thumbnail: Data?, sceneContext: Data? = nil) {
+        isCameraLive = true
+        simulatedThumbnailJPEG = thumbnail
+        simulatedSceneContextJPEG = sceneContext
+    }
+    #endif
+
+    public func startCamera(graceDelaySeconds: Double = 0.8) {
+        clearCachedFrames()
         aimInstructionText = "Aim at the liquid"
         #if os(iOS)
         worker.start(graceDelaySeconds: graceDelaySeconds) { [weak self] live in
@@ -420,7 +459,8 @@ public final class CameraTargetingService: ObservableObject {
     }
 
     public func stopCamera() {
-        targetLockProgress = 0.0
+        isCameraLive = false
+        clearCachedFrames()
         #if os(iOS)
         worker.stop()
         #endif
@@ -431,7 +471,8 @@ public final class CameraTargetingService: ObservableObject {
         guard isCameraLive else { return nil }
         return worker.latestThumbnailJPEG()
         #else
-        return nil
+        guard isCameraLive else { return nil }
+        return simulatedThumbnailJPEG
         #endif
     }
 
@@ -440,7 +481,8 @@ public final class CameraTargetingService: ObservableObject {
         guard isCameraLive else { return nil }
         return worker.latestSceneContextJPEG()
         #else
-        return nil
+        guard isCameraLive else { return nil }
+        return simulatedSceneContextJPEG
         #endif
     }
 

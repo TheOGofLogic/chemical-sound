@@ -181,8 +181,16 @@ public final class ConsumerScanCoordinator: ObservableObject {
         activeScanTask = Task { [weak self] in
             guard let self else { return }
             if !self.cameraService.isCameraLive {
-                self.cameraService.startCamera(graceDelaySeconds: 10.0)
-                try? await self.researchCoordinator.timing.sleepMilliseconds(800)
+                // Phase R2-C (`LA-R2-C-PLAN-001` Sec. 2.4): Purge stale frames and start camera immediately (`graceDelaySeconds: 0.0`)
+                // so a back-to-back batch launch can never reuse the preceding run's captured thumbnail
+                self.cameraService.clearCachedFrames()
+                self.cameraService.startCamera(graceDelaySeconds: 0.0)
+                for _ in 0..<3 {
+                    try? await self.researchCoordinator.timing.sleepMilliseconds(300)
+                    if self.cameraService.latestTargetingThumbnail() != nil {
+                        break
+                    }
+                }
             }
             _ = await self.cameraService.lockOpticsForControlledBatchIfLive()
             let thumbnailData = self.cameraService.latestTargetingThumbnail()
@@ -244,7 +252,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
         guard !source.isEmpty else { return "" }
         let ordered = Array(source.reversed())
         var lines: [String] = [
-            "scan_num,batch_run_id,batch_index,batch_total,timestamp_iso,geometry_condition,control_series_tag,ae_af_wb_lock_state,target_lock_state,target_lock_score,final_status,gate_decision,rejection_reason,final_classification,primary_peak_hz,primary_peak_db,secondary_peaks_hz,secondary_peaks_db,intra_scan_persistence,container_centroid_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_rms_dbfs,echo_return_db,tail_snr_db,alignment_offset_samples,echo_arrival_delay_ms,hf_scatter_db,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores,is_conditioning_cycle,mode_a_screening,modal_f1_f4_hz,modal_mask_1_4,modal_q1_q4,modal_edc_alpha1_4_per_s,modal_s_att_db_per_khz,late_preroll_dbfs"
+            "scan_num,batch_run_id,batch_index,batch_total,timestamp_iso,geometry_condition,control_series_tag,ae_af_wb_lock_state,target_lock_state,target_lock_score,final_status,gate_decision,rejection_reason,final_classification,primary_peak_hz,primary_peak_db,secondary_peaks_hz,secondary_peaks_db,intra_scan_persistence,container_centroid_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_rms_dbfs,echo_return_db,tail_snr_db,alignment_offset_samples,echo_arrival_delay_ms,hf_scatter_db,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores,is_conditioning_cycle,mode_a_screening,modal_f1_f4_hz,modal_mask_1_4,modal_q1_q4,modal_edc_alpha1_4_per_s,modal_s_att_db_per_khz,late_preroll_dbfs,delta_f_empty_pct_1_4,delta_f_water_pct_1_4,delta_s_hf_db"
         ]
         let isoFmt = ISO8601DateFormatter()
         for (idx, item) in ordered.enumerated() {
@@ -262,6 +270,16 @@ public final class ConsumerScanCoordinator: ObservableObject {
             let modalAlphas = mv?.decayAlphaPerSec.map { $0.map { String(format: "%.2f", $0) } ?? "NaN" }.joined(separator: ";") ?? ""
             let sAttStr = mv?.spectralAttenuationSlopeDBPerKHz.map { String(format: "%.3f", $0) } ?? ""
             let latePreStr = f.map { String(format: "%.2f", $0.latePreRollNoiseDBFS) } ?? ""
+            let dEmptyPct = item.deltaEmptyBaseline?.relativeFrequencyShifts.map { $0.map { String(format: "%+.2f", $0 * 100.0) } ?? "NaN" }.joined(separator: ";") ?? ""
+            let dWaterPct = item.deltaWaterBaseline?.relativeFrequencyShifts.map { $0.map { String(format: "%+.2f", $0 * 100.0) } ?? "NaN" }.joined(separator: ";") ?? ""
+            let deltaSHFStr: String = {
+                guard let f else { return "" }
+                return OnDeviceAcousticClassifier.computeDifferentialBubbleScatterDB(
+                    features: f,
+                    geometryCondition: item.geometryCondition,
+                    prototypes: calibratedPrototypes
+                ).map { String(format: "%+.2f", $0) } ?? ""
+            }()
             let row = [
                 "\(seq)",
                 Self.csvEscape(item.batchRunID ?? ""),
@@ -309,7 +327,10 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 Self.csvEscape(modalQs),
                 Self.csvEscape(modalAlphas),
                 sAttStr,
-                latePreStr
+                latePreStr,
+                Self.csvEscape(dEmptyPct),
+                Self.csvEscape(dWaterPct),
+                deltaSHFStr
             ].joined(separator: ",")
             lines.append(row)
         }
@@ -425,13 +446,72 @@ public final class ConsumerScanCoordinator: ObservableObject {
     public func clearCalibratedStandards() {
         calibratedPrototypes = []
         prototypeStore.clearAll()
+        reconcileHistoryWithCalibratedBaselines(forGeometry: nil)
+    }
+
+    /// Phase R2-C (`LA-R2-C-PLAN-001` Sec. 2.1): Saves the steady-state median (`Sweeps 3..20`, `K_cond = 2` purged)
+    /// of a multi-scan cohort as an empirical container or reference baseline (`EMPTY_CONTAINER`, `H2O_DIST`, `SOLID_SURFACE`, etc.)
+    /// and reconciles matching-geometry scans in `history` so `Delta X_empty` / `Delta X_water` shift vectors populate immediately.
+    @discardableResult
+    public func teachCalibratedBatchBaseline(
+        items: [ConsumerScanItem],
+        targetID: String
+    ) -> CalibratedAcousticPrototype? {
+        guard let agg = BatchSteadyStateFeatureAggregator.aggregate(items: items, targetID: targetID) else {
+            return nil
+        }
+        let proto = CalibratedAcousticPrototype(
+            targetID: targetID,
+            features: agg.features,
+            geometryCondition: agg.geometryCondition,
+            sourceBatchRunID: agg.batchRunID,
+            steadyStateSweepCount: agg.steadyStateSweepCount
+        )
+        prototypeStore.upsertBaseline(proto)
+        calibratedPrototypes = prototypeStore.loadAll()
+        triggerLightHaptic()
+
+        reconcileHistoryWithCalibratedBaselines(forGeometry: agg.geometryCondition)
+        return proto
+    }
+
+    /// Re-evaluates existing matching-geometry scans in `history` against `calibratedPrototypes` while preserving raw features.
+    public func reconcileHistoryWithCalibratedBaselines(forGeometry geometryCondition: String?) {
+        guard !history.isEmpty else { return }
+        var updatedCurrentResult: ConsumerScanItem?
+        let currentResultID: UUID? = {
+            if case .result(let current) = flowStep { return current.id }
+            return nil
+        }()
+
+        history = history.map { existing in
+            if let geom = geometryCondition, !geom.isEmpty,
+               let itemGeom = existing.geometryCondition, !itemGeom.isEmpty,
+               geom != itemGeom {
+                return existing
+            }
+            let refreshed = classifier.reevaluateExistingItem(existing, calibratedPrototypes: calibratedPrototypes)
+            if refreshed.id == currentResultID {
+                updatedCurrentResult = refreshed
+            }
+            return refreshed
+        }
+        historyStore.saveAll(history)
+        _ = exportRepeatabilityCSVURL(items: nil, filenameSuffix: "latest_all")
+        if let updatedCurrentResult {
+            flowStep = .result(updatedCurrentResult)
+        }
     }
 
     /// Saves the measured 11D acoustic scattering vector from a scan as a known empirical standard
     /// (enabling calibrated indirect acoustic inference for blind testing in clear or opaque containers).
     public func teachCalibratedStandard(from item: ConsumerScanItem, targetID: String) {
         guard let features = item.measuredFeatures else { return }
-        let proto = CalibratedAcousticPrototype(targetID: targetID, features: features)
+        let proto = CalibratedAcousticPrototype(
+            targetID: targetID,
+            features: features,
+            geometryCondition: item.geometryCondition
+        )
         prototypeStore.append(proto)
         calibratedPrototypes = prototypeStore.loadAll()
         triggerLightHaptic()

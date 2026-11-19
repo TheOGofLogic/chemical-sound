@@ -988,6 +988,62 @@ public struct ConsumerScanFlowView: View {
                                 }
                                 .buttonStyle(.plain)
 
+                                if let bID = item.batchRunID, !bID.isEmpty, (item.batchTotalCount ?? 1) > 1 {
+                                    let batchMembers = coordinator.history.filter { $0.batchRunID == bID }
+                                    if batchMembers.count >= 2 {
+                                        Menu {
+                                            Button {
+                                                _ = coordinator.teachCalibratedBatchBaseline(
+                                                    items: batchMembers,
+                                                    targetID: CalibratedAcousticPrototype.emptyContainerTargetID
+                                                )
+                                            } label: {
+                                                Label("Empty Container Baseline (Sweeps 3–20)", systemImage: "cup.and.saucer")
+                                            }
+                                            Button {
+                                                _ = coordinator.teachCalibratedBatchBaseline(
+                                                    items: batchMembers,
+                                                    targetID: CalibratedAcousticPrototype.waterReferenceTargetID
+                                                )
+                                            } label: {
+                                                Label("Water Reference Baseline (Sweeps 3–20)", systemImage: "drop.fill")
+                                            }
+                                            Button {
+                                                _ = coordinator.teachCalibratedBatchBaseline(
+                                                    items: batchMembers,
+                                                    targetID: CalibratedAcousticPrototype.solidSurfaceTargetID
+                                                )
+                                            } label: {
+                                                Label("Solid Surface Baseline (Sweeps 3–20)", systemImage: "cube.fill")
+                                            }
+                                            Divider()
+                                            Menu("Known Liquid Standard (Sweeps 3–20)...") {
+                                                ForEach(ReferenceLiquidProfile.provisionalLibrary) { profile in
+                                                    Button {
+                                                        _ = coordinator.teachCalibratedBatchBaseline(
+                                                            items: batchMembers,
+                                                            targetID: profile.id
+                                                        )
+                                                    } label: {
+                                                        Text("\(profile.displayName) (\(profile.formulaDisplay))")
+                                                    }
+                                                }
+                                            }
+                                        } label: {
+                                            Label("Save 20× Steady-State (Sweeps 3–20) as Baseline", systemImage: "scope")
+                                                .font(.caption.weight(.bold))
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 16)
+                                                .padding(.vertical, 9)
+                                                .background(
+                                                    Capsule(style: .continuous)
+                                                        .fill(LiquidAnalyzerPalette.resultGreenStart)
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+
                                 if item.measuredFeatures != nil && item.status != .unclearScan {
                                     Button(action: {
                                         calibrationTargetItem = item
@@ -1133,6 +1189,14 @@ public struct ConsumerScanFlowView: View {
                     String(format: "Cent %.0f Hz • Decay %.0f dB/s • Cav %.1f dB", feat.spectralCentroidHz, feat.decaySlopeDBPerSec, feat.cavityMultipathDB)
                 )
                 r1Row("Vector / Checksum", vectorText)
+                if let de = item.deltaEmptyBaseline, de.compatible {
+                    let sText = de.relativeFrequencyShifts.map { $0.map { String(format: "%+.1f%%", $0 * 100.0) } ?? "NaN" }.joined(separator: "; ")
+                    r1Row("Δf / f_empty", "[\(sText)]")
+                }
+                if let dw = item.deltaWaterBaseline, dw.compatible {
+                    let wText = dw.relativeFrequencyShifts.map { $0.map { String(format: "%+.1f%%", $0 * 100.0) } ?? "NaN" }.joined(separator: "; ")
+                    r1Row("Δf / f_water", "[\(wText)]")
+                }
                 if let gateDec = item.gateDecision {
                     r1Row("Gate Decision", gateDec)
                 }
