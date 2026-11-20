@@ -43,7 +43,7 @@ Extracted from `LiquidAnalyzer_R1_latest_all.csv` (`R1_Exports/`):
    * Even though golden oil colorimetry ranked `Cooking / Vegetable Oil` `#1` in raw candidate diagnostics (`d = 3.836`), `MODE_A` respected the uncalibrated screening boundary and emitted **zero airborne viscosity or molecular claims**.
 2. **Live Hardware Proof of the Dual-Condition Bubble Gate (`Scan 62`, `SINGLE_20261119_154500`)**:
    * On `Scan 62`, reflected high-frequency scatter rose to `-6.44 dB` (`delta_s_hf_db = +2.97 dB >= +2.50 dB`).
-   * Because there was **no genuine pre-roll acoustic fizz** (`preRollExcessHFDB <= 0.0`), the second gate in [OnDeviceAcousticClassifier.swift](../LiquidAnalyzer/Consumer/OnDeviceAcousticClassifier.swift) properly blocked a false effervescence claim (`0 / 63` false bubble triggers across the entire session).
+   * Because there was **no genuine pre-roll acoustic fizz** (`preRollExcessHFDB <= 0.0`), the second gate in [OnDeviceAcousticClassifier.swift](../../LiquidAnalyzer/Consumer/OnDeviceAcousticClassifier.swift) properly blocked a false effervescence claim (`0 / 63` false bubble triggers across the entire session).
 3. **Computed $\Delta \vec{F} / \vec{F}_{\text{water}}$ Shifts Against `153522` (`Water` `[1811.0, 3117.4, 3608.3, 4329.3] Hz`)**:
    * **`154156` (`Scans 41–60`) vs. Water**: `[-0.62%, +5.74%, -4.08%, -4.68%]` across paired modes (`3117 -> 3098 Hz`, `3608 -> 3461 Hz`, `4329 -> 4127 Hz`), with mode-3 Schroeder decay dropping from `187.6 s⁻¹` (Water) to `88.3 s⁻¹`.
    * **`Scan 63` (Cooking Oil) vs. Water**: `[+14.50%, -1.46%, +15.45%, -0.12%]` (`1811 -> 2073.5 Hz`, `3117.4 -> 3071.9 Hz`, `4329.3 -> 4324.3 Hz`).

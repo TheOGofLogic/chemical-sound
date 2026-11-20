@@ -6,5 +6,5 @@ __pycache__/
 DerivedData/
 *.xcodeproj/
 build/
-reports/
+/reports/
 release/

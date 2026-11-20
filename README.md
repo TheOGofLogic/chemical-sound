@@ -5,12 +5,13 @@
 ## Ratified Phase R2 Baseline (`v0.4.1-build14-accepted`)
 
 The repository's airborne **`MODE_A`** non-contact acoustic screening engine is formally ratified and frozen at tag **`v0.4.1-build14-accepted`** (Commit `6d067cf`, `39 / 39` Swift XCTests passing on pinned `xcode: "27.2"`):
-- **Final Acceptance Report:** [`docs/LA-R2-FINAL-ACCEPTANCE-REPORT.md`](docs/LA-R2-FINAL-ACCEPTANCE-REPORT.md) (`R2_ACCEPTANCE_GRANTED`)
+- **Final Acceptance Report:** [`docs/reports/LA-R2-FINAL-ACCEPTANCE-REPORT.md`](docs/reports/LA-R2-FINAL-ACCEPTANCE-REPORT.md) (`R2_ACCEPTANCE_GRANTED`)
 - **Supporting Empirical & Verification Records:**
-  - [`docs/LA-R2-A-SANDBOX-REPORT-001.md`](docs/LA-R2-A-SANDBOX-REPORT-001.md) — Offline sandbox verification across `140` raw Float32 WAVs (`48 kHz`), ratifying Chu-compensated narrowband Schroeder EDC (`0.00%` clamp saturation), $K_{\text{cond}} = 2$ conditioning purge, $\ge 900\text{ ms}$ inter-sweep settle, and late pre-roll noise isolation.
-  - [`docs/LA-R2-B-FIELD-AUDIT-001.md`](docs/LA-R2-B-FIELD-AUDIT-001.md) — Live iPhone Duo field audit of `v0.4.0` (Build `13`, `140` scans across `7` stationary cohorts).
-  - [`docs/LA-R2-C-PLAN-001.md`](docs/LA-R2-C-PLAN-001.md) & [`docs/LA-R2-C-VERIFICATION-REPORT-001.md`](docs/LA-R2-C-VERIFICATION-REPORT-001.md) — Implementation and `63`-scan live iPhone Duo verification of `v0.4.1` (Build `14`), confirming `20×` (`Sweeps 3–20`) steady-state baseline calibration, the dual-condition differential bubble gate ($\Delta S_{\text{HF}} \ge +2.50\text{ dB}$ AND `preRollExcessHFDB > 0.0`, `0.00%` false triggers), log-ratio diagnostic decay normalization, and live camera frame integrity.
-- **Airborne `MODE_A` Scope Boundary:** Strictly restricted to physically verifiable airborne phenomena (`EMPTY_CONTAINER`, `LIQUID_LOADED`, `BUBBLE_SCATTER_DETECTED`, `NONSTANDARD_SURFACE_RESPONSE`, and calibrated $\Delta \vec{F}/\vec{F}_{\text{empty}}$ & $\Delta \vec{F}/\vec{F}_{\text{water}}$ modal shift vectors with explicit `NaN` missing-mode masks). All ungrounded airborne viscosity claims remain removed; bulk acoustic impedance and shear-viscosity discrimination through the container wall are isolated for **Phase R3 (`MODE_B` Direct Structural Coupling)**.
+  - [`docs/reports/LA-R2-SPEC-001.md`](docs/reports/LA-R2-SPEC-001.md) — Governing Phase R2 airborne `MODE_A` architecture & scope specification.
+  - [`docs/reports/LA-R2-A-SANDBOX-REPORT-001.md`](docs/reports/LA-R2-A-SANDBOX-REPORT-001.md) — Offline sandbox verification across `140` raw Float32 WAVs (`48 kHz`), ratifying Chu-compensated narrowband Schroeder EDC (`0.00%` clamp saturation), $K_{\text{cond}} = 2$ conditioning purge, $\ge 900\text{ ms}$ inter-sweep settle, and late pre-roll noise isolation.
+  - [`docs/reports/LA-R2-B-FIELD-AUDIT-001.md`](docs/reports/LA-R2-B-FIELD-AUDIT-001.md) — Live iPhone Duo field audit of `v0.4.0` (Build `13`, `140` scans across `7` stationary cohorts).
+  - [`docs/reports/LA-R2-C-PLAN-001.md`](docs/reports/LA-R2-C-PLAN-001.md) & [`docs/reports/LA-R2-C-VERIFICATION-REPORT-001.md`](docs/reports/LA-R2-C-VERIFICATION-REPORT-001.md) — Implementation and `63`-scan live iPhone Duo verification of `v0.4.1` (Build `14`), confirming `20×` (`Sweeps 3–20`) steady-state baseline calibration, the dual-condition differential bubble gate ($\Delta S_{\text{HF}} \ge +2.50\text{ dB}$ AND `preRollExcessHFDB > 0.0`, `0.00%` false triggers), log-ratio diagnostic decay normalization, and live camera frame integrity.
+- **Airborne `MODE_A` Scope Boundary:** Strictly restricted to physically verifiable airborne phenomena (`EMPTY_CONTAINER`, `LIQUID_LOADED`, `BUBBLE_SCATTER_DETECTED`, `NONSTANDARD_SURFACE_RESPONSE`, and calibrated $\Delta \vec{F}/\vec{F}_{\text{empty}}$ & $\Delta \vec{F}/\vec{F}_{\text{water}}$ modal shift vectors with explicit `NaN` missing-mode masks). All ungrounded airborne viscosity claims remain removed; bulk acoustic impedance and shear-viscosity discrimination through the container wall are isolated for **Phase R3 (`MODE_B` Direct Structural Coupling — [`docs/reports/LA-R3-SPEC-001.md`](docs/reports/LA-R3-SPEC-001.md))**.
 
 Controlled implementation across **Phase 1 (`CS-SPEC-P1-v1.2`)** and **Phase R2 (`v0.4.1` Build `14`)**, covering:
 - **Milestone 1:** Frozen v1.2 Specification & Milestone 4 Stop/Go Gate Report (`docs/`).
@@ -27,11 +28,14 @@ Controlled implementation across **Phase 1 (`CS-SPEC-P1-v1.2`)** and **Phase R2 
 ```text
 liquid-analyzer/
 ├── docs/
-│   ├── LA-R2-FINAL-ACCEPTANCE-REPORT.md # Ratified Phase R2 Acceptance Report (v0.4.1-build14-accepted)
-│   ├── LA-R2-C-VERIFICATION-REPORT-001.md # Live 63-scan iPhone Duo verification of v0.4.1 Build 14
-│   ├── LA-R2-C-PLAN-001.md              # Phase R2-C calibration & field edge-case remediation plan
-│   ├── LA-R2-B-FIELD-AUDIT-001.md       # Live 140-scan iPhone Duo field audit of v0.4.0 Build 13
-│   ├── LA-R2-A-SANDBOX-REPORT-001.md    # Phase R2-A 140-WAV offline DSP estimator audit report
+│   ├── reports/
+│   │   ├── LA-R2-SPEC-001.md            # Governing Phase R2 MODE_A architecture specification
+│   │   ├── LA-R2-A-SANDBOX-REPORT-001.md # Phase R2-A 140-WAV offline DSP estimator audit report
+│   │   ├── LA-R2-B-FIELD-AUDIT-001.md   # Live 140-scan iPhone Duo field audit of v0.4.0 Build 13
+│   │   ├── LA-R2-C-PLAN-001.md          # Phase R2-C calibration & field edge-case remediation plan
+│   │   ├── LA-R2-C-VERIFICATION-REPORT-001.md # Live 63-scan iPhone Duo verification of v0.4.1 Build 14
+│   │   ├── LA-R2-FINAL-ACCEPTANCE-REPORT.md # Ratified Phase R2 Acceptance Report (v0.4.1-build14-accepted)
+│   │   └── LA-R3-SPEC-001.md            # Draft Phase R3 MODE_B wall-coupled transducer specification
 │   ├── CS-SPEC-P1-v1.2.md               # Frozen Phase 1 v1.2 Master Specification
 │   ├── CS-SOP-M3B-P1-v1.1.md            # Controlled Milestone 3B Bench SOP & Gate 0B Thresholds (v1.1)
 │   ├── CS-CHK-M3B-P1-v1.0.md            # Milestone 3B Physical-Run Checklist (Sections A-O)
@@ -107,3 +111,24 @@ liquid-analyzer/
    # Inspect an individual deconvolved ESS recording
    .\.venv\Scripts\python.exe -m liquid_analyzer.cli inspect-recording --recording path\to\scan.wav
    ```
+
+---
+
+## Scientific Governance & Phase R2 Milestones
+
+Liquid Analyzer adheres to strict physical boundary isolation and reproducibility standards.
+
+### Ratified Phase R2 Documentation (Build 12 → Build 14)
+* **Governing Specification:** [`LA-R2-SPEC-001`](docs/reports/LA-R2-SPEC-001.md)
+* **Offline Verification & Estimator Selection:** [`LA-R2-A-SANDBOX-REPORT-001`](docs/reports/LA-R2-A-SANDBOX-REPORT-001.md)
+* **Field Audit (Build 13 Evaluation):** [`LA-R2-B-FIELD-AUDIT-001`](docs/reports/LA-R2-B-FIELD-AUDIT-001.md)
+* **Build 14 Remediation Plan:** [`LA-R2-C-PLAN-001`](docs/reports/LA-R2-C-PLAN-001.md)
+* **On-Device Hardware Verification:** [`LA-R2-C-VERIFICATION-REPORT-001`](docs/reports/LA-R2-C-VERIFICATION-REPORT-001.md)
+* **Final Acceptance & Release Record:** [`LA-R2-FINAL-ACCEPTANCE-REPORT`](docs/reports/LA-R2-FINAL-ACCEPTANCE-REPORT.md)
+* **Phase R3 Contact Architecture (Draft):** [`LA-R3-SPEC-001`](docs/reports/LA-R3-SPEC-001.md)
+
+### Release Provenance
+* **Accepted Release Tag:** [`v0.4.1-build14-accepted`](https://github.com/TheOGofLogic/chemical-sound/releases/tag/v0.4.1-build14-accepted)
+* **Head Commit:** `6d067cff97ef1641cce3772e72da0cd14ad593ca`
+* **Pinned Toolchain:** Xcode 27.2 (`Build 27B52`), macOS 27.2 (`26B123`), Apple Swift 6.4.2
+* **Operational Scope:** `MODE_A` is strictly bounded to physical acoustic screening (`EMPTY_CONTAINER`, `LIQUID_LOADED`, `BUBBLE_SCATTER_DETECTED`, `NONSTANDARD_SURFACE_RESPONSE`, and calibrated differential shift vectors $\Delta \vec{F}/\vec{F}_{\text{empty}}$ / $\Delta \vec{F}/\vec{F}_{\text{water}}$). All contact/guided-wave operations are deferred to Phase R3 `MODE_B`.

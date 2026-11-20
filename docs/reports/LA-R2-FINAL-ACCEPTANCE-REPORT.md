@@ -1,7 +1,7 @@
 # LA-R2-FINAL-ACCEPTANCE-REPORT: Phase R2 Progression & Acceptance (Build 12 → Build 14)
 
 **Repository:** `org.chemicalsound.acquisition` (Liquid Analyzer)  
-**Governing Specifications:** `LA-R2-SPEC-001`, [LA-R2-A-SANDBOX-REPORT-001.md](LA-R2-A-SANDBOX-REPORT-001.md), [LA-R2-C-PLAN-001.md](LA-R2-C-PLAN-001.md)  
+**Governing Specifications:** [LA-R2-SPEC-001.md](LA-R2-SPEC-001.md), [LA-R2-A-SANDBOX-REPORT-001.md](LA-R2-A-SANDBOX-REPORT-001.md), [LA-R2-C-PLAN-001.md](LA-R2-C-PLAN-001.md)  
 **Target Tag:** `v0.4.1-build14-accepted`  
 **Base Commit:** `6d067cff97ef1641cce3772e72da0cd14ad593ca`  
 **Date:** 2026-11-19  
@@ -44,12 +44,12 @@ Across 140 laboratory scans and 63 on-device live field scans on the Apple iPhon
 ## 3. Engineering & Architectural Solutions Implemented
 
 ### 3.1 Toolchain Reproducibility (ITMS-90725)
-* **Configuration:** Eliminated all occurrences of floating `xcode: latest` tags across workflows in [codemagic.yaml](../codemagic.yaml). Pinned to explicit release string `xcode: "27.2"` on the `mac_mini_m2` architecture.
+* **Configuration:** Eliminated all occurrences of floating `xcode: latest` tags across workflows in [codemagic.yaml](../../codemagic.yaml). Pinned to explicit release string `xcode: "27.2"` on the `mac_mini_m2` architecture.
 * **Manifest Provenance:** Enabled automatic generation of `toolchain_manifest.txt` capturing host OS version (`macOS 26B123`), Xcode build (`27B52`), SDK (`iphoneos27.2`), and Swift compiler version (`6.4.2`).
 
 ### 3.2 Transient Settling & Inter-Sweep Acoustic Isolation
 * **Purge Window ($K_{\text{cond}} = 2$):** Calibration bursts enforce `isConditioningCycle = true` on sweeps $1$ and $2$.
-* **Physical Ring-Down Decay:** Enforced `minimumInterSweepSettleMs = 900` via `awaitInterSweepSettle()` in [ConsumerScanCoordinator.swift](../LiquidAnalyzer/Consumer/ConsumerScanCoordinator.swift).
+* **Physical Ring-Down Decay:** Enforced `minimumInterSweepSettleMs = 900` via `awaitInterSweepSettle()` in [ConsumerScanCoordinator.swift](../../LiquidAnalyzer/Consumer/ConsumerScanCoordinator.swift).
 * **Pre-Roll Noise Sampling:** Relocated ambient deconvolved noise extraction to the late pre-roll silence slice (`[onset - 95 ms .. onset - 10 ms]`), insulating noise baselines from late reverberant tail reflections.
 
 ### 3.3 Chu-Compensated Schroeder EDC & 4-Mode Vector Masking
@@ -60,13 +60,13 @@ Across 140 laboratory scans and 63 on-device live field scans on the Apple iPhon
 * **Explicit Missing-Mode Masking:** Mode dropouts strictly emit `mask_i = 0` and `f_i = NaN`. Artificial zero-padding and synthetic centroid substitutions are strictly prohibited.
 
 ### 3.4 Dual-Condition Differential Bubble Scatter Gate
-* **Noise Floor Bias Elimination:** Removed the static `0.04 * unitFull` high-frequency spectral floor above $5.2\text{ kHz}$ in [OnDeviceAcousticClassifier.swift](../LiquidAnalyzer/Consumer/OnDeviceAcousticClassifier.swift).
+* **Noise Floor Bias Elimination:** Removed the static `0.04 * unitFull` high-frequency spectral floor above $5.2\text{ kHz}$ in [OnDeviceAcousticClassifier.swift](../../LiquidAnalyzer/Consumer/OnDeviceAcousticClassifier.swift).
 * **Differential Excess Metric:** Asserted that high-frequency scatter must exceed baseline container reflection by at least $+2.50\text{ dB}$:
   $$\Delta S_{\text{HF}} = S_{\text{HF, sample}} - \max(S_{\text{HF, empty}}, S_{\text{HF, water}}) \ge +2.50\text{ dB}$$
 * **Acoustic Fizz Confounder Lock:** Mandated non-zero pre-roll acoustic hiss (`preRollExcessHFDB > 0.0`) to confirm effervescence before emitting `BUBBLE_SCATTER_DETECTED`, blocking false triggers on still liquids and elevated glass reflections.
 
 ### 3.5 Calibration Persistence & Diagnostic Distance Normalization
-* **20× Steady-State Baseline Action:** Added user actions in [ConsumerTabsView.swift](../LiquidAnalyzer/Consumer/ConsumerTabsView.swift) and [ConsumerScanFlowView.swift](../LiquidAnalyzer/Consumer/ConsumerScanFlowView.swift) to save the steady-state median ($\text{Sweeps } 3\text{--}20$) of any stationary cohort as `EMPTY_CONTAINER`, `WATER_REFERENCE`, or `SOLID_SURFACE`.
+* **20× Steady-State Baseline Action:** Added user actions in [ConsumerTabsView.swift](../../LiquidAnalyzer/Consumer/ConsumerTabsView.swift) and [ConsumerScanFlowView.swift](../../LiquidAnalyzer/Consumer/ConsumerScanFlowView.swift) to save the steady-state median ($\text{Sweeps } 3\text{--}20$) of any stationary cohort as `EMPTY_CONTAINER`, `WATER_REFERENCE`, or `SOLID_SURFACE`.
 * **Log-Ratio Distance Scaling:** Updated `computeFrozenCandidateDistances` decay distance to use bounded log-ratios:
   $$d_{\text{decay}} = \frac{\left| \ln\!\left(\dfrac{\max(1.0, \alpha)}{\max(1.0, \alpha_{\text{prior}})}\right) \right|}{0.42}$$
   preventing multi-point decay slopes from corrupting candidate matching diagnostics.
