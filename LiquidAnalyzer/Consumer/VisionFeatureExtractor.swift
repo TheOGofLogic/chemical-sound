@@ -251,9 +251,9 @@ public struct VisionFeatureExtractor: Sendable {
         let interiorEdgeDensity = inGradCnt > 0 ? (inGradSum / inGradCnt) : 0.02
 
         let opticalTurbidity: Double = {
-            // High-albedo opaque white colloidal scatter (Milk / Cream)
-            if meanVal > 0.80 && meanSatWB < 0.09 && lumaVar < 0.004 && (meanLumaApprox - rimVal) > 0.06 {
-                return min(0.98, 0.84 + 0.14 * min(1.0, (meanVal - 0.80) / 0.16))
+            // High-albedo opaque white colloidal scatter (Milk / Cream: luma > 0.85, near-zero chroma)
+            if meanLumaApprox > 0.85 && meanSatWB < 0.08 && lumaVar < 0.004 && (meanLumaApprox - rimVal) > 0.08 {
+                return min(0.98, 0.85 + 0.13 * min(1.0, (meanLumaApprox - 0.85) / 0.12))
             }
             // Deep optical absorption (Coffee / Cola / Red Wine)
             if meanVal < 0.22 && (rimVal - meanLumaApprox) > 0.16 {
@@ -275,29 +275,35 @@ public struct VisionFeatureExtractor: Sendable {
         }()
 
         // 4. Horizontal Meniscus Surface Boundary Profile & Contact-Angle Estimation
-        let yTop = Int(Double(grid) * 0.20)
-        let yBot = Int(Double(grid) * 0.78)
-        let xLeftRange = Int(Double(grid) * 0.31)...Int(Double(grid) * 0.39)
-        let xCenterRange = Int(Double(grid) * 0.44)...Int(Double(grid) * 0.56)
-        let xRightRange = Int(Double(grid) * 0.61)...Int(Double(grid) * 0.69)
+        // Uses polarity-consistent vertical gradients (headspace -> liquid step sign) so curved top container rims
+        // (dark rim -> bright headspace, opposite polarity) never masquerade as capillary wall rise.
+        let yTop = Int(Double(grid) * 0.24)
+        let yBot = Int(Double(grid) * 0.76)
+        let xLeftRange = Int(Double(grid) * 0.34)...Int(Double(grid) * 0.41)
+        let xCenterRange = Int(Double(grid) * 0.45)...Int(Double(grid) * 0.55)
+        let xRightRange = Int(Double(grid) * 0.59)...Int(Double(grid) * 0.66)
 
-        func verticalGradAt(y: Int, xRange: ClosedRange<Int>) -> Double {
+        func signedVerticalStepAt(y: Int, xRange: ClosedRange<Int>) -> Double {
             var sum = 0.0
             var cnt = 0.0
             for x in xRange {
-                let g = abs(lumaGrid[(y + 1) * grid + x] - lumaGrid[(y - 1) * grid + x])
-                sum += g
+                // Positive when upper row (y - 1) is brighter than lower row (y + 1)
+                let step = lumaGrid[(y - 1) * grid + x] - lumaGrid[(y + 1) * grid + x]
+                sum += step
                 cnt += 1.0
             }
             return cnt > 0 ? sum / cnt : 0.0
         }
 
         var bestCenterY = (yTop + yBot) / 2
+        var bestCenterSigned = 0.0
         var bestCenterGrad = 0.0
         for y in (yTop + 4)..<(yBot - 4) {
-            let gCenter = verticalGradAt(y: y, xRange: xCenterRange)
+            let sCenter = signedVerticalStepAt(y: y, xRange: xCenterRange)
+            let gCenter = abs(sCenter)
             if gCenter > bestCenterGrad {
                 bestCenterGrad = gCenter
+                bestCenterSigned = sCenter
                 bestCenterY = y
             }
         }
@@ -308,8 +314,8 @@ public struct VisionFeatureExtractor: Sendable {
         var fillFrac: Double? = nil
 
         if meniscusDetected {
-            // Search within [bestCenterY - 10 ... bestCenterY + 4] for capillary wall contact height on left & right walls
-            let searchMinY = max(yTop + 1, bestCenterY - 10)
+            let polaritySign: Double = bestCenterSigned >= 0.0 ? 1.0 : -1.0
+            let searchMinY = max(yTop + 1, bestCenterY - 9)
             let searchMaxY = min(yBot - 1, bestCenterY + 4)
 
             var bestLeftY = bestCenterY
@@ -318,12 +324,12 @@ public struct VisionFeatureExtractor: Sendable {
             var maxRightG = -1.0
 
             for y in searchMinY...searchMaxY {
-                let gl = verticalGradAt(y: y, xRange: xLeftRange)
+                let gl = signedVerticalStepAt(y: y, xRange: xLeftRange) * polaritySign
                 if gl > maxLeftG {
                     maxLeftG = gl
                     bestLeftY = y
                 }
-                let gr = verticalGradAt(y: y, xRange: xRightRange)
+                let gr = signedVerticalStepAt(y: y, xRange: xRightRange) * polaritySign
                 if gr > maxRightG {
                     maxRightG = gr
                     bestRightY = y
@@ -334,11 +340,9 @@ public struct VisionFeatureExtractor: Sendable {
                 let avgWallY = 0.5 * Double(bestLeftY + bestRightY)
                 // Positive risePixels means concave upward capillary wetting at container walls (smaller y = higher in image)
                 let risePixels = Double(bestCenterY) - avgWallY
-                let innerWidthPx = Double(grid) * 0.34
-                curvatureRatio = risePixels / max(1.0, innerWidthPx)
-                // High surface tension water (~72.8 mN/m) -> stronger concave rise -> ~20..32 deg apparent contact angle;
-                // Acetic acid / vinegar / oil / surfactant -> flatter meniscus -> ~40..56 deg
-                contactAngleDeg = min(78.0, max(14.0, 46.0 - 190.0 * curvatureRatio))
+                let halfSpanPx = Double(grid) * 0.135
+                curvatureRatio = risePixels / max(1.0, halfSpanPx)
+                contactAngleDeg = min(78.0, max(14.0, 46.0 - 145.0 * curvatureRatio))
             }
 
             let span = Double(max(1, yBot - yTop))

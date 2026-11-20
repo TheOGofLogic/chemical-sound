@@ -397,8 +397,9 @@ public struct MultiModalFusionClassifier: Sendable {
         if let milk = catalog.first(where: { $0.id == "MILK_DAIRY" }),
            !bubbleDetected,
            !visual.hasBarcode,
-           vision.meanValueBrightness >= 0.78,
-           (vision.meanValueBrightness - vision.rimValueBrightness) >= 0.07 {
+           vision.meanValueBrightness >= 0.86,
+           vision.opticalTurbidity >= 0.80,
+           (vision.meanValueBrightness - vision.rimValueBrightness) >= 0.08 {
             let dSat = vision.meanSaturationWB / 0.055
             let dVal = max(0.0, 0.86 - vision.meanValueBrightness) / 0.08
             let dTurb = max(0.0, 0.86 - vision.opticalTurbidity) / 0.12

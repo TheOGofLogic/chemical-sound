@@ -179,8 +179,16 @@ public struct VisualLiquidContextAnalyzer: Sendable {
         // 4. Positive Container / Liquid Evidence Gate — Rejects Walls, Furniture, Floors, & Non-Liquids!
         // Never defaults unknown scenes or painted walls to H₂O.
         let isDarkOrCovered = reticleOptics.innerBrightness < 0.05
-        let isSolidDominated = solidSurfaceScore >= 0.12 && vesselScore < max(0.08, solidSurfaceScore * 0.65) && !hasBarcode
-        let lacksAnyContainerEvidence = vesselScore < 0.045 && !hasBarcode && bestAnnularRim < 0.022
+        let hasIsoluminantChromaticPool = (reticleOptics.innerSaturationWB - reticleOptics.rimSaturationWB) >= 0.26
+            && bestAnnularRim >= 0.010
+        let isSolidDominated = solidSurfaceScore >= 0.12
+            && vesselScore < max(0.08, solidSurfaceScore * 0.65)
+            && !hasBarcode
+            && !hasIsoluminantChromaticPool
+        let lacksAnyContainerEvidence = vesselScore < 0.045
+            && !hasBarcode
+            && bestAnnularRim < 0.022
+            && !hasIsoluminantChromaticPool
 
         if isDarkOrCovered || isSolidDominated || lacksAnyContainerEvidence {
             return makeSummary(

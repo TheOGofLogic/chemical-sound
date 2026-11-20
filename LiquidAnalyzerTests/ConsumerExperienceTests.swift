@@ -1138,7 +1138,7 @@ final class ConsumerExperienceTests: XCTestCase {
         // 3. Citrus / Fruit Juice: Chromatic orange pool
         let juiceJPEG = try Self.makeSyntheticReticleJPEG(
             outerRGB: (216, 216, 216),
-            rimRGB: (176, 180, 184),
+            rimRGB: (96, 100, 108),
             innerRGB: (242, 136, 22)
         )
         let juiceRes = classifier.classifySamples(samples: cavityRec, inverseFilter: inv, thumbnailJPEGData: juiceJPEG)
@@ -1697,19 +1697,21 @@ final class ConsumerExperienceTests: XCTestCase {
             for x in 0..<size {
                 let dx = (Double(x) - 63.5) / 64.0
                 let dy = (Double(y) - 63.5) / 64.0
-                let r = sqrt(dx * dx + dy * dy)
+                let absX = abs(dx)
+                let absY = abs(dy)
                 let c: (UInt8, UInt8, UInt8)
-                if r > 0.58 {
+                // Cylindrical glass side-view frame: outer neutral background, vertical side walls + top/bottom rims
+                if absX > 0.56 || absY > 0.62 {
                     c = (216, 216, 216)
-                } else if r >= 0.40 {
+                } else if absX >= 0.42 || absY >= 0.48 {
                     c = (88, 92, 98)
                 } else {
-                    let normWallX = min(1.2, abs(Double(x) - 63.5) / 22.0)
-                    let meniscusY = 64.0 - capillaryRisePx * (normWallX * normWallX)
+                    let normWallX = min(1.0, abs(Double(x) - 63.5) / 24.0)
+                    let meniscusY = 66.0 - capillaryRisePx * (normWallX * normWallX)
                     if Double(y) < meniscusY {
-                        c = (212, 214, 218)
+                        c = (214, 216, 220)
                     } else {
-                        c = (160, 164, 170)
+                        c = (158, 162, 168)
                     }
                 }
                 let idx = (y * size + x) * 4
