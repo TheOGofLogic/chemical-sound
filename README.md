@@ -35,6 +35,7 @@ liquid-analyzer/
 │   │   ├── LA-R2-C-PLAN-001.md          # Phase R2-C calibration & field edge-case remediation plan
 │   │   ├── LA-R2-C-VERIFICATION-REPORT-001.md # Live 63-scan iPhone Duo verification of v0.4.1 Build 14
 │   │   ├── LA-R2-FINAL-ACCEPTANCE-REPORT.md # Ratified Phase R2 Acceptance Report (v0.4.1-build14-accepted)
+│   │   ├── LA-V050-FUSION-PLAN-001.md       # v0.5.0 Multi-Modal Acoustic-Optical Fusion & Hardening Spec
 │   │   └── LA-R3-SPEC-001.md            # Draft Phase R3 MODE_B wall-coupled transducer specification
 │   ├── CS-SPEC-P1-v1.2.md               # Frozen Phase 1 v1.2 Master Specification
 │   ├── CS-SOP-M3B-P1-v1.1.md            # Controlled Milestone 3B Bench SOP & Gate 0B Thresholds (v1.1)
@@ -52,7 +53,7 @@ liquid-analyzer/
 │   ├── SIG_ESS_v1_inverse.wav           # 200 ms matched inverse filter
 │   ├── SIG_STEP_v1.wav                  # 1000 ms stepped tones (10 x [60 ms tone + 40 ms silent gap])
 │   └── SIG_SIL_v1.wav                   # 200 ms digital-zero silence control
-├── LiquidAnalyzer/                      # Two-Layer iOS Application (v0.4.1 / Build 14, MODE_A Frozen)
+├── LiquidAnalyzer/                      # Two-Layer iOS Application (v0.5.0 Fusion + MODE_A Frozen Baseline)
 │   ├── App/                             # LiquidAnalyzerApp, AppCoordinator (scenePhase monitor)
 │   ├── Consumer/                        # Layer 1: Calibrated MODE_A Screening, Schroeder EDC & 4-tab UI
 │   ├── Domain/                          # Layer 2: 22 states, events, failures, flags, ScanRecord parity
@@ -64,7 +65,7 @@ liquid-analyzer/
 │   ├── QualityControl/                  # QualityControlEngine, ImmediateAudioAnalyzer, MetadataValidator
 │   ├── Persistence/                     # Atomic AcquisitionStore, AuditLogger, SHA-256 ExportManager
 │   └── UI/                              # Protected Research / Developer Mode Bench Views
-├── LiquidAnalyzerTests/                 # Swift XCTest suite (39 tests: R2-B/R2-C DSP, State, QC, Export)
+├── LiquidAnalyzerTests/                 # Swift XCTest suite (45 tests: R2-B/R2-C DSP, v0.5.0 Fusion/Vision, State, QC, Export)
 ├── codemagic.yaml                       # Pinned CI workflow (xcode: "27.2", zero floating tags)
 ├── Package.swift                        # Swift Package manifest (LiquidAnalyzer — iOS 17+ / macOS 14+)
 ├── project.yml                          # XcodeGen iOS App specification (org.chemicalsound.acquisition)
@@ -125,6 +126,7 @@ Liquid Analyzer adheres to strict physical boundary isolation and reproducibilit
 * **Build 14 Remediation Plan:** [`LA-R2-C-PLAN-001`](docs/reports/LA-R2-C-PLAN-001.md)
 * **On-Device Hardware Verification:** [`LA-R2-C-VERIFICATION-REPORT-001`](docs/reports/LA-R2-C-VERIFICATION-REPORT-001.md)
 * **Final Acceptance & Release Record:** [`LA-R2-FINAL-ACCEPTANCE-REPORT`](docs/reports/LA-R2-FINAL-ACCEPTANCE-REPORT.md)
+* **v0.5.0 Multi-Modal Sensor Fusion & Hardening Record:** [`LA-V050-FUSION-PLAN-001`](docs/reports/LA-V050-FUSION-PLAN-001.md)
 * **Phase R3 Contact Architecture (Draft):** [`LA-R3-SPEC-001`](docs/reports/LA-R3-SPEC-001.md)
 
 ### Release Provenance
