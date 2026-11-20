@@ -5,7 +5,19 @@ public struct ConsumerScanFlowView: View {
     @ObservedObject var coordinator: ConsumerScanCoordinator
     @ObservedObject private var cameraService: CameraTargetingService
     @State private var activeTuneItem: ConsumerScanItem?
-    @State private var calibrationTargetItem: ConsumerScanItem?
+    private enum ActiveScanSheet: Identifiable {
+        case calibration(ConsumerScanItem)
+        case comparator
+
+        var id: String {
+            switch self {
+            case .calibration(let item): return "calibration-\(item.id.uuidString)"
+            case .comparator: return "comparator"
+            }
+        }
+    }
+
+    @State private var activeSheet: ActiveScanSheet?
     @State private var copiedSingleScanID: UUID?
 
     public init(coordinator: ConsumerScanCoordinator) {
@@ -57,20 +69,38 @@ public struct ConsumerScanFlowView: View {
         } message: {
             Text(coordinator.consumerAlertMessage ?? "")
         }
-        .sheet(item: $calibrationTargetItem) { targetItem in
-            CalibrateKnownStandardSheet(
-                item: targetItem,
-                onSelectTarget: { chosenID in
-                    coordinator.teachCalibratedStandard(from: targetItem, targetID: chosenID)
-                    calibrationTargetItem = nil
-                },
-                onCancel: {
-                    calibrationTargetItem = nil
-                }
-            )
+        .onAppear {
+            if coordinator.isComparatorWizardPresented {
+                activeSheet = .comparator
+            }
         }
-        .sheet(isPresented: $coordinator.isComparatorWizardPresented) {
-            LiquidComparatorWizardView(coordinator: coordinator)
+        .onChange(of: coordinator.isComparatorWizardPresented) { _, presented in
+            if presented {
+                activeSheet = .comparator
+            } else if case .comparator = activeSheet {
+                activeSheet = nil
+            }
+        }
+        .sheet(item: $activeSheet, onDismiss: {
+            if coordinator.isComparatorWizardPresented {
+                coordinator.isComparatorWizardPresented = false
+            }
+        }) { sheet in
+            switch sheet {
+            case .calibration(let targetItem):
+                CalibrateKnownStandardSheet(
+                    item: targetItem,
+                    onSelectTarget: { chosenID in
+                        coordinator.teachCalibratedStandard(from: targetItem, targetID: chosenID)
+                        activeSheet = nil
+                    },
+                    onCancel: {
+                        activeSheet = nil
+                    }
+                )
+            case .comparator:
+                LiquidComparatorWizardView(coordinator: coordinator)
+            }
         }
     }
 
@@ -110,25 +140,29 @@ public struct ConsumerScanFlowView: View {
                         number: "1",
                         color: LiquidAnalyzerPalette.scanBlue,
                         title: "AIM",
-                        subtitle: "Point at liquid"
+                        subtitle: "Point at liquid",
+                        action: { coordinator.openCameraAiming(graceDelaySeconds: 0.9) }
                     )
                     posterStepBadge(
                         number: "2",
                         color: LiquidAnalyzerPalette.resultGreenStart,
                         title: "SCAN",
-                        subtitle: "Sound waves"
+                        subtitle: "Sound waves",
+                        action: { coordinator.openCameraAiming(graceDelaySeconds: 0.9) }
                     )
                     posterStepBadge(
                         number: "3",
                         color: LiquidAnalyzerPalette.compositionOrange,
                         title: "SEE",
-                        subtitle: "Composition"
+                        subtitle: "Composition",
+                        action: { openLatestResultOrHistory() }
                     )
                     posterStepBadge(
                         number: "4",
                         color: LiquidAnalyzerPalette.tunePurple,
                         title: "LISTEN",
-                        subtitle: "Chemical tune"
+                        subtitle: "Chemical tune",
+                        action: { openLatestChemicalTune() }
                     )
                 }
                 .padding(.horizontal, 16)
@@ -352,28 +386,32 @@ public struct ConsumerScanFlowView: View {
                         iconColor: LiquidAnalyzerPalette.scanBlue,
                         bgColor: Color(red: 0.90, green: 0.95, blue: 1.00),
                         title: "Camera + Sound",
-                        subtitle: "Uses iPhone camera & audio system"
+                        subtitle: "Uses iPhone camera & audio system",
+                        action: { coordinator.openCameraAiming(graceDelaySeconds: 0.9) }
                     )
                     posterFeatureTile(
                         icon: "flask.fill",
                         iconColor: LiquidAnalyzerPalette.resultGreenStart,
                         bgColor: Color(red: 0.90, green: 0.98, blue: 0.93),
                         title: "Identify Liquids",
-                        subtitle: "Water, beverages & reference profiles"
+                        subtitle: "Water, beverages & reference profiles",
+                        action: { coordinator.openCameraAiming(graceDelaySeconds: 0.9) }
                     )
                     posterFeatureTile(
                         icon: "chart.bar.fill",
                         iconColor: LiquidAnalyzerPalette.compositionOrange,
                         bgColor: Color(red: 1.00, green: 0.95, blue: 0.89),
                         title: "See Composition",
-                        subtitle: "Simple, clear experimental cards"
+                        subtitle: "Simple, clear experimental cards",
+                        action: { openLatestResultOrHistory() }
                     )
                     posterFeatureTile(
                         icon: "music.note",
                         iconColor: LiquidAnalyzerPalette.tunePurple,
                         bgColor: Color(red: 0.95, green: 0.91, blue: 1.00),
                         title: "Hear the Signature",
-                        subtitle: "Play the rainbow Chemical Tune"
+                        subtitle: "Play the rainbow Chemical Tune",
+                        action: { openLatestChemicalTune() }
                     )
                 }
                 .padding(.horizontal, 18)
@@ -443,33 +481,38 @@ public struct ConsumerScanFlowView: View {
         number: String,
         color: Color,
         title: String,
-        subtitle: String
+        subtitle: String,
+        action: @escaping () -> Void
     ) -> some View {
-        VStack(spacing: 5) {
-            Text(number)
-                .font(.system(size: 16, weight: .heavy, design: .rounded))
-                .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
-                .background(Circle().fill(color))
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Text(number)
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(color))
 
-            Text(title)
-                .font(.caption.weight(.heavy))
-                .foregroundStyle(Color(red: 0.08, green: 0.14, blue: 0.25))
+                Text(title)
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(Color(red: 0.08, green: 0.14, blue: 0.25))
 
-            Text(subtitle)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
+                Text(subtitle)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white)
+                    .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
+            )
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white)
-                .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
-        )
+        .buttonStyle(.plain)
     }
 
     private func posterFeatureTile(
@@ -477,31 +520,56 @@ public struct ConsumerScanFlowView: View {
         iconColor: Color,
         bgColor: Color,
         title: String,
-        subtitle: String
+        subtitle: String,
+        action: @escaping () -> Void
     ) -> some View {
-        VStack(spacing: 7) {
-            Image(systemName: icon)
-                .font(.system(size: 24, weight: .bold))
-                .foregroundStyle(iconColor)
-                .frame(height: 28)
+        Button(action: action) {
+            VStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(iconColor)
+                    .frame(height: 28)
 
-            Text(title)
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(iconColor)
-                .multilineTextAlignment(.center)
+                Text(title)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(iconColor)
+                    .multilineTextAlignment(.center)
 
-            Text(subtitle)
-                .font(.caption2)
-                .foregroundStyle(Color(red: 0.25, green: 0.30, blue: 0.38))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(Color(red: 0.25, green: 0.30, blue: 0.38))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, minHeight: 104)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(bgColor)
+            )
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, minHeight: 104)
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(bgColor)
-        )
+        .buttonStyle(.plain)
+    }
+
+    private func openLatestResultOrHistory() {
+        if let latest = coordinator.history.first {
+            coordinator.openHistoryItem(latest)
+        } else {
+            coordinator.selectedTab = .history
+        }
+    }
+
+    private func openLatestChemicalTune() {
+        if let latest = coordinator.history.first {
+            coordinator.tunePlayer.stop()
+            withAnimation(.easeInOut(duration: 0.24)) {
+                activeTuneItem = latest
+            }
+            coordinator.tunePlayer.togglePlayPause(for: latest)
+        } else {
+            coordinator.openCameraAiming(graceDelaySeconds: 0.9)
+        }
     }
 
     // MARK: - 1. AIM Screen (`< Liquid Analyzer ⚙` — Auto-Locks on Steady Target OR Tap SCAN)
@@ -1054,6 +1122,7 @@ public struct ConsumerScanFlowView: View {
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
                                     .padding(.vertical, 6)
+                                    .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
 
@@ -1115,7 +1184,7 @@ public struct ConsumerScanFlowView: View {
 
                                 if item.measuredFeatures != nil && item.status != .unclearScan {
                                     Button(action: {
-                                        calibrationTargetItem = item
+                                        activeSheet = .calibration(item)
                                     }) {
                                         Label("Calibrate Setup (Empty / Water / Salt...)", systemImage: "scope")
                                             .font(.caption.weight(.semibold))
@@ -1126,6 +1195,7 @@ public struct ConsumerScanFlowView: View {
                                                 Capsule(style: .continuous)
                                                     .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
                                             )
+                                            .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -1159,6 +1229,7 @@ public struct ConsumerScanFlowView: View {
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.92))
                         .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             } else {
@@ -1187,6 +1258,7 @@ public struct ConsumerScanFlowView: View {
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(.white.opacity(0.88))
                         .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             } else {
