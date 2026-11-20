@@ -1429,6 +1429,70 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertNotEqual(res.title, "Cooking / Vegetable Oil")
     }
 
+    func testV050_StabilityGuards_AttributionCodableDarkFrameAndWarmLightingMilk() throws {
+        let baseFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 34.0, peakDBFS: -24.0, clippedSamples: 0,
+            dominantPeakHz: 2_380.0, spectralCentroidHz: 3_380.0,
+            midToHighBandDB: 4.2, decaySlopeDBPerSec: 825.0,
+            highFreqBubbleScatterDB: -10.1, preRollExcessHFDB: -5.8
+        )
+
+        // 1. Uncalibrated clear liquid guidance must be Equatable and JSONEncoder-safe (no NaN)
+        let clearVis = VisionFeatureVector(
+            hasCameraFrame: true,
+            meanHueDegrees: 0.0,
+            meanSaturationWB: 0.04,
+            meanValueBrightness: 0.75,
+            opticalTurbidity: 0.12,
+            meniscusContactAngleDegrees: 28.0
+        )
+        let attr = try XCTUnwrap(
+            MultiModalFusionClassifier.uncalibratedClearLiquidGuidance(
+                features: baseFeat,
+                vision: clearVis,
+                deltaEmpty: nil,
+                deltaWater: nil,
+                bubbleDetected: false
+            )
+        )
+        XCTAssertEqual(attr, attr)
+        XCTAssertNil(attr.mahalanobisDistance)
+        XCTAssertNil(attr.secondBestDistance)
+        XCTAssertNil(attr.winningMargin)
+        let encoded = try JSONEncoder().encode(attr)
+        let decoded = try JSONDecoder().decode(MultiModalAttribution.self, from: encoded)
+        XCTAssertEqual(decoded, attr)
+
+        // 2. Dark neutral frame (< 0.24 brightness) must not trigger clear-aqueous guidance
+        let darkVis = VisionFeatureVector(
+            hasCameraFrame: true,
+            meanHueDegrees: 0.0,
+            meanSaturationWB: 0.05,
+            meanValueBrightness: 0.12,
+            opticalTurbidity: 0.25,
+            meniscusContactAngleDegrees: 35.0
+        )
+        XCTAssertNil(
+            MultiModalFusionClassifier.uncalibratedClearLiquidGuidance(
+                features: baseFeat,
+                vision: darkVis,
+                deltaEmpty: nil,
+                deltaWater: nil,
+                bubbleDetected: false
+            )
+        )
+
+        // 3. Warm-tinted lighting (wbGain != 1.0) must keep unified WB luma variance clean for Milk
+        let warmMilkJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (224, 204, 184),
+            rimRGB: (116, 106, 96),
+            innerRGB: (252, 232, 210)
+        )
+        let warmMilkVis = VisionFeatureExtractor().extract(jpegData: warmMilkJPEG)
+        XCTAssertGreaterThanOrEqual(warmMilkVis.opticalTurbidity, 0.85)
+        XCTAssertLessThan(warmMilkVis.meanSaturationWB, 0.08)
+    }
+
     // MARK: - Helpers
 
     private static func loadBundledESSAndInverse() throws -> (ess: [Float], inv: [Float]) {
