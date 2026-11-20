@@ -74,8 +74,16 @@ public struct VisionFeatureExtractor: Sendable {
         let primaryData = jpegData ?? sceneContextJPEGData
         guard let primaryData,
               !primaryData.isEmpty,
-              let src = CGImageSourceCreateWithData(primaryData as CFData, nil),
-              let cgImage = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+              let src = CGImageSourceCreateWithData(primaryData as CFData, nil) else {
+            return .audioOnlyEmpty
+        }
+        let thumbOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 128
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbOptions as CFDictionary)
+            ?? CGImageSourceCreateImageAtIndex(src, 0, nil) else {
             return .audioOnlyEmpty
         }
         return Self.extractFromCGImage(cgImage)
@@ -146,7 +154,7 @@ public struct VisionFeatureExtractor: Sendable {
 
         // 2. Extract interior liquid core (rad <= 0.28), transition halo (0.24..0.37), and rim (0.38..0.62)
         var inRSum = 0.0, inGSum = 0.0, inBSum = 0.0
-        var inValSum = 0.0, inValSqSum = 0.0, inCnt = 0.0
+        var inValSum = 0.0, inLumaSum = 0.0, inValSqSum = 0.0, inCnt = 0.0
         var hueSinSum = 0.0, hueCosSum = 0.0, hueWeightSum = 0.0
         var inGradSum = 0.0, inGradCnt = 0.0
 
@@ -164,7 +172,7 @@ public struct VisionFeatureExtractor: Sendable {
                 let minC = min(r, min(g, b))
                 let delta = maxC - minC
                 let sat = maxC > 0.04 ? (delta / maxC) : 0.0
-                let luma = lumaGrid[y * grid + x]
+                let lumaWB = 0.299 * r + 0.587 * g + 0.114 * b
 
                 let dx = (Double(x) - half) * invHalf
                 let dy = (Double(y) - half) * invHalf
@@ -175,7 +183,8 @@ public struct VisionFeatureExtractor: Sendable {
                     inGSum += g
                     inBSum += b
                     inValSum += maxC
-                    inValSqSum += luma * luma
+                    inLumaSum += lumaWB
+                    inValSqSum += lumaWB * lumaWB
                     inCnt += 1.0
 
                     if delta > 0.008 {
@@ -192,7 +201,7 @@ public struct VisionFeatureExtractor: Sendable {
                     inGradCnt += 1.0
                 }
 
-                if rad >= 0.24 && rad <= 0.37 && luma >= 0.10 && luma <= 0.72 && delta > 0.015 {
+                if rad >= 0.24 && rad <= 0.37 && lumaWB >= 0.10 && lumaWB <= 0.72 && delta > 0.015 {
                     let hDeg = Self.rgbToHueDegrees(r: r, g: g, b: b, maxC: maxC, delta: delta)
                     let hRad = hDeg * Double.pi / 180.0
                     haloSinSum += sin(hRad) * sat
@@ -205,7 +214,7 @@ public struct VisionFeatureExtractor: Sendable {
                     rimRSum += r
                     rimGSum += g
                     rimBSum += b
-                    rimValSum += luma
+                    rimValSum += lumaWB
                     rimCnt += 1.0
                 }
             }
@@ -246,7 +255,7 @@ public struct VisionFeatureExtractor: Sendable {
         }()
 
         // 3. Optical Turbidity / Opacity Estimation (0 = crystal-clear/translucent, 1 = opaque colloidal emulsion)
-        let meanLumaApprox = 0.299 * meanR + 0.587 * meanG + 0.114 * meanB
+        let meanLumaApprox = inCnt > 0 ? (inLumaSum / inCnt) : (0.299 * meanR + 0.587 * meanG + 0.114 * meanB)
         let lumaVar = inCnt > 0 ? max(0.0, (inValSqSum / inCnt) - (meanLumaApprox * meanLumaApprox)) : 0.0
         let interiorEdgeDensity = inGradCnt > 0 ? (inGradSum / inGradCnt) : 0.02
 
