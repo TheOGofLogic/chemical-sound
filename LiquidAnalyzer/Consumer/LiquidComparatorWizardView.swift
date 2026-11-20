@@ -131,6 +131,7 @@ public struct MultiModalAttributionCardView: View {
                                 )
                             )
                     )
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 2)
@@ -290,7 +291,6 @@ public struct LiquidComparatorWizardView: View {
                 .foregroundStyle(Color(red: 0.32, green: 0.38, blue: 0.48))
 
             Button(action: {
-                dismiss()
                 coordinator.executeGuidedComparatorStep(step)
             }) {
                 HStack {
@@ -321,6 +321,7 @@ public struct LiquidComparatorWizardView: View {
                                 : AnyShapeStyle(LiquidAnalyzerPalette.scanBlue.opacity(0.10))
                         )
                 )
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
