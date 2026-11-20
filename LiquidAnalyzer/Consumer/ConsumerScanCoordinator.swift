@@ -66,7 +66,33 @@ public final class ConsumerScanCoordinator: ObservableObject {
     @Published public var hapticsEnabled: Bool = true
     @Published public var selectedGeometryCondition: GeometryTestCondition = .stationary15InBaseline
     @Published public var selectedControlSeriesTag: ControlSeriesTag = .unlabeledBlind
+    @Published public var selectedInferenceMode: ConsumerInferenceMode = .multiModalFusion {
+        didSet {
+            if oldValue != selectedInferenceMode {
+                reconcileHistoryWithCalibratedBaselines(forGeometry: nil)
+            }
+        }
+    }
+    @Published public var isComparatorWizardPresented: Bool = false
+    @Published public var comparatorActiveStep: GuidedComparatorStep = .emptyCup
+    @Published public var comparatorBurstCount: Int = 6
     @Published public var isResearchConsolePresented: Bool = false
+
+    public var hasEmptyBaselineForSelectedGeometry: Bool {
+        let g = selectedGeometryCondition.rawValue
+        return calibratedPrototypes.contains {
+            $0.targetID == CalibratedAcousticPrototype.emptyContainerTargetID &&
+                (($0.geometryCondition ?? "").isEmpty || $0.geometryCondition == g)
+        }
+    }
+
+    public var hasWaterBaselineForSelectedGeometry: Bool {
+        let g = selectedGeometryCondition.rawValue
+        return calibratedPrototypes.contains {
+            $0.targetID == CalibratedAcousticPrototype.waterReferenceTargetID &&
+                (($0.geometryCondition ?? "").isEmpty || $0.geometryCondition == g)
+        }
+    }
 
     public private(set) var isConfiguringSession: Bool = false
     public let cameraService: CameraTargetingService
@@ -210,6 +236,86 @@ public final class ConsumerScanCoordinator: ObservableObject {
         }
     }
 
+    /// Opens the v0.5.0 Guided 3-Step Cup Comparator Wizard advancing automatically to the next unlocked step.
+    public func openGuidedComparatorWizard() {
+        if !hasEmptyBaselineForSelectedGeometry {
+            comparatorActiveStep = .emptyCup
+        } else if !hasWaterBaselineForSelectedGeometry {
+            comparatorActiveStep = .waterBlank
+        } else {
+            comparatorActiveStep = .testSample
+        }
+        isComparatorWizardPresented = true
+    }
+
+    /// Executes Step 1 (Empty Cup), Step 2 (Water Blank), or Step 3 (Test Liquid) of the Guided 3-Step Cup Comparator.
+    public func executeGuidedComparatorStep(_ step: GuidedComparatorStep) {
+        guard activeScanTask == nil else { return }
+        tunePlayer.stop()
+        consumerAlertMessage = nil
+        isComparatorWizardPresented = false
+        triggerLightHaptic()
+
+        let targetN = max(5, min(20, comparatorBurstCount))
+        let geometryTag = selectedGeometryCondition.rawValue
+        let autoTargetID: String?
+        let nextStep: GuidedComparatorStep?
+        let controlTag: String
+
+        switch step {
+        case .emptyCup:
+            autoTargetID = CalibratedAcousticPrototype.emptyContainerTargetID
+            nextStep = .waterBlank
+            controlTag = ControlSeriesTag.emptyContainer.rawValue
+        case .waterBlank:
+            autoTargetID = CalibratedAcousticPrototype.waterReferenceTargetID
+            nextStep = .testSample
+            controlTag = ControlSeriesTag.water.rawValue
+        case .testSample:
+            autoTargetID = nil
+            nextStep = nil
+            controlTag = ControlSeriesTag.unlabeledBlind.rawValue
+        }
+
+        scanProgress = 0.04
+        scanningStatusTitle = "\(step.stepTitle) (1 / \(targetN))"
+        scanningStatusSubtitle = "Locking camera & acoustics • Hold steady"
+        selectedTab = .scan
+        flowStep = .scanning
+
+        activeScanTask = Task { [weak self] in
+            guard let self else { return }
+            if !self.cameraService.isCameraLive {
+                self.cameraService.clearCachedFrames()
+                self.cameraService.startCamera(graceDelaySeconds: 0.0)
+                for _ in 0..<3 {
+                    try? await self.researchCoordinator.timing.sleepMilliseconds(300)
+                    if self.cameraService.latestTargetingThumbnail() != nil {
+                        break
+                    }
+                }
+            }
+            _ = await self.cameraService.lockOpticsForControlledBatchIfLive()
+            let thumbnailData = self.cameraService.latestTargetingThumbnail()
+            let sceneContextData = self.cameraService.latestSceneContextJPEG()
+            let lockSnapshot = self.cameraService.captureLockSnapshot(isAutoTriggered: false, isControlledBatch: true)
+            self.cameraService.stopCamera()
+
+            await self.runAutomatedConsumerScan(
+                thumbnailData: thumbnailData,
+                sceneContextData: sceneContextData,
+                lockSnapshot: lockSnapshot,
+                geometryCondition: geometryTag,
+                controlSeriesTag: controlTag,
+                batchTotalCount: targetN,
+                autoSaveBaselineTargetID: autoTargetID,
+                comparatorFollowUpStep: nextStep,
+                stayOnResultAfterBatch: step == .testSample
+            )
+            self.activeScanTask = nil
+        }
+    }
+
     public func cancelActiveScan() {
         guard !isConfiguringSession else { return }
         activeScanTask?.cancel()
@@ -252,7 +358,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
         guard !source.isEmpty else { return "" }
         let ordered = Array(source.reversed())
         var lines: [String] = [
-            "scan_num,batch_run_id,batch_index,batch_total,timestamp_iso,geometry_condition,control_series_tag,ae_af_wb_lock_state,target_lock_state,target_lock_score,final_status,gate_decision,rejection_reason,final_classification,primary_peak_hz,primary_peak_db,secondary_peaks_hz,secondary_peaks_db,intra_scan_persistence,container_centroid_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_rms_dbfs,echo_return_db,tail_snr_db,alignment_offset_samples,echo_arrival_delay_ms,hf_scatter_db,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores,is_conditioning_cycle,mode_a_screening,modal_f1_f4_hz,modal_mask_1_4,modal_q1_q4,modal_edc_alpha1_4_per_s,modal_s_att_db_per_khz,late_preroll_dbfs,delta_f_empty_pct_1_4,delta_f_water_pct_1_4,delta_s_hf_db"
+            "scan_num,batch_run_id,batch_index,batch_total,timestamp_iso,geometry_condition,control_series_tag,ae_af_wb_lock_state,target_lock_state,target_lock_score,final_status,gate_decision,rejection_reason,final_classification,primary_peak_hz,primary_peak_db,secondary_peaks_hz,secondary_peaks_db,intra_scan_persistence,container_centroid_hz,active_rms_dbfs,peak_dbfs,snr_db,echo_rms_dbfs,echo_return_db,tail_snr_db,alignment_offset_samples,echo_arrival_delay_ms,hf_scatter_db,decay_db_per_s,cavity_multipath_db,feature_checksum,subband_db_vector,top_candidate,top_dist,second_candidate,second_dist,winning_margin,all_candidate_scores,is_conditioning_cycle,mode_a_screening,modal_f1_f4_hz,modal_mask_1_4,modal_q1_q4,modal_edc_alpha1_4_per_s,modal_s_att_db_per_khz,late_preroll_dbfs,delta_f_empty_pct_1_4,delta_f_water_pct_1_4,delta_s_hf_db,vision_hue_deg,vision_sat_wb,vision_turbidity,meniscus_angle_deg,fusion_mode"
         ]
         let isoFmt = ISO8601DateFormatter()
         for (idx, item) in ordered.enumerated() {
@@ -280,6 +386,12 @@ public final class ConsumerScanCoordinator: ObservableObject {
                     prototypes: calibratedPrototypes
                 ).map { String(format: "%+.2f", $0) } ?? ""
             }()
+            let vf = f?.visionFeatures
+            let vHueStr = vf.map { String(format: "%.1f", $0.meanHueDegrees) } ?? ""
+            let vSatStr = vf.map { String(format: "%.3f", $0.meanSaturationWB) } ?? ""
+            let vTurbStr = vf.map { String(format: "%.3f", $0.opticalTurbidity) } ?? ""
+            let vMeniscusStr = vf.map { String(format: "%.1f", $0.meniscusContactAngleDegrees) } ?? ""
+            let fusionModeStr = item.fusionAttribution?.inferenceMode ?? ""
             let row = [
                 "\(seq)",
                 Self.csvEscape(item.batchRunID ?? ""),
@@ -330,7 +442,12 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 latePreStr,
                 Self.csvEscape(dEmptyPct),
                 Self.csvEscape(dWaterPct),
-                deltaSHFStr
+                deltaSHFStr,
+                vHueStr,
+                vSatStr,
+                vTurbStr,
+                vMeniscusStr,
+                Self.csvEscape(fusionModeStr)
             ].joined(separator: ",")
             lines.append(row)
         }
@@ -490,7 +607,11 @@ public final class ConsumerScanCoordinator: ObservableObject {
                geom != itemGeom {
                 return existing
             }
-            let refreshed = classifier.reevaluateExistingItem(existing, calibratedPrototypes: calibratedPrototypes)
+            let refreshed = classifier.reevaluateExistingItem(
+                existing,
+                calibratedPrototypes: calibratedPrototypes,
+                inferenceModeOverride: selectedInferenceMode
+            )
             if refreshed.id == currentResultID {
                 updatedCurrentResult = refreshed
             }
@@ -627,7 +748,10 @@ public final class ConsumerScanCoordinator: ObservableObject {
         lockSnapshot: CameraLockSnapshot,
         geometryCondition: String,
         controlSeriesTag: String,
-        batchTotalCount: Int
+        batchTotalCount: Int,
+        autoSaveBaselineTargetID: String? = nil,
+        comparatorFollowUpStep: GuidedComparatorStep? = nil,
+        stayOnResultAfterBatch: Bool = false
     ) async {
         let protocolConfig = researchCoordinator.protocolConfiguration
         let waveformRepo = researchCoordinator.waveformRepository
@@ -780,7 +904,8 @@ public final class ConsumerScanCoordinator: ObservableObject {
                     sceneContextJPEGData: sceneContextData,
                     opticsLocked: lockSnapshot.opticsLocked,
                     calibratedPrototypes: calibratedPrototypes,
-                    latePreRollSilence: captureSegment.latePreRollSilenceSamples
+                    latePreRollSilence: captureSegment.latePreRollSilenceSamples,
+                    inferenceModeOverride: selectedInferenceMode
                 )
 
                 // Preserve EVERY scan (including rejected quality & non-liquid controls) — never silently drop!
@@ -794,6 +919,15 @@ public final class ConsumerScanCoordinator: ObservableObject {
             }
 
             warmAudioEngine.stopWarmBatchEngine()
+            // Auto-save baseline when invoked from Guided 3-Step Cup Comparator (Step 1 Empty or Step 2 Water Blank)
+            if let autoSaveTarget = autoSaveBaselineTargetID {
+                let batchMembers = history.filter { $0.batchRunID == batchRunID }
+                _ = teachCalibratedBatchBaseline(items: batchMembers, targetID: autoSaveTarget)
+                if let refreshedLast = history.first(where: { $0.batchRunID == batchRunID }) {
+                    lastResultItem = refreshedLast
+                }
+            }
+
             // Auto-save unlocked CSV copies into Documents/R1_Exports/ so they are always available in the Files app
             _ = exportRepeatabilityCSVURL(items: nil, filenameSuffix: "latest_all")
             if targetCount > 1 {
@@ -804,7 +938,19 @@ public final class ConsumerScanCoordinator: ObservableObject {
             if Task.isCancelled { return }
             scanProgress = 1.0
 
-            if targetCount > 1 {
+            if let nextStep = comparatorFollowUpStep {
+                comparatorActiveStep = nextStep
+                selectedTab = .scan
+                flowStep = .home
+                isComparatorWizardPresented = true
+            } else if stayOnResultAfterBatch {
+                selectedTab = .scan
+                if let lastResultItem {
+                    flowStep = .result(lastResultItem)
+                } else {
+                    flowStep = .home
+                }
+            } else if targetCount > 1 {
                 selectedTab = .history
                 if let lastResultItem {
                     flowStep = .result(lastResultItem)

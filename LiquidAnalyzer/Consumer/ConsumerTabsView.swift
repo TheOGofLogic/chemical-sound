@@ -788,7 +788,18 @@ public struct ConsumerMoreView: View {
                 }
 
                 Section("Calibrated Standards") {
+                    Picker("Inference Engine", selection: $consumer.selectedInferenceMode) {
+                        ForEach(ConsumerInferenceMode.allCases, id: \.rawValue) { mode in
+                            Text(mode.displayTitle).tag(mode)
+                        }
+                    }
                     LabeledContent("Saved Acoustic Standards", value: "\(consumer.calibratedPrototypes.count)")
+                    Button {
+                        consumer.selectedTab = .scan
+                        consumer.openGuidedComparatorWizard()
+                    } label: {
+                        Label("Open 3-Step Cup Comparator", systemImage: "checklist.checked")
+                    }
                     if !consumer.calibratedPrototypes.isEmpty {
                         Button("Reset Calibrated Standards", role: .destructive) {
                             consumer.clearCalibratedStandards()
@@ -812,7 +823,7 @@ public struct ConsumerMoreView: View {
 
                 Section("About") {
                     LabeledContent("Application", value: "Liquid Analyzer")
-                    LabeledContent("Version", value: "0.4.1 (Build 14 • R2-C MODE_A)")
+                    LabeledContent("Version", value: "0.5.0 (Build 15 • Multi-Modal Fusion)")
                 }
             }
             .navigationTitle("More")

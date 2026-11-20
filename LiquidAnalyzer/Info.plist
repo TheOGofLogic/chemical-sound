@@ -19,15 +19,15 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.4.1</string>
+    <string>0.5.0</string>
     <key>CFBundleVersion</key>
-    <string>14</string>
+    <string>15</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSCameraUsageDescription</key>
-    <string>Liquid Analyzer uses the camera to help you aim at the liquid container. Acoustic sound-wave measurements—not the camera image—provide the analysis signal.</string>
+    <string>Liquid Analyzer uses the camera to aim at the container and extract optical colorimetry, turbidity, and meniscus geometry alongside acoustic sound-wave measurements.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Liquid Analyzer uses the microphone to capture sound-wave reflections from the liquid container during a scan.</string>
     <key>UIFileSharingEnabled</key>

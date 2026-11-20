@@ -331,6 +331,7 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
     public let latePreRollNoiseDBFS: Double
     public let preRollExcessHFDB: Double
     public let modalVector: ModalVector4?
+    public let visionFeatures: VisionFeatureVector?
 
     public init(
         activeSNRDB: Double,
@@ -362,7 +363,8 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         opticsLocked: Bool = false,
         latePreRollNoiseDBFS: Double = -82.0,
         preRollExcessHFDB: Double = 0.0,
-        modalVector: ModalVector4? = nil
+        modalVector: ModalVector4? = nil,
+        visionFeatures: VisionFeatureVector? = nil
     ) {
         self.activeSNRDB = activeSNRDB
         self.activeRMSDBFS = activeRMSDBFS
@@ -394,6 +396,7 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         self.latePreRollNoiseDBFS = latePreRollNoiseDBFS
         self.preRollExcessHFDB = preRollExcessHFDB
         self.modalVector = modalVector
+        self.visionFeatures = visionFeatures
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -427,6 +430,7 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         case latePreRollNoiseDBFS
         case preRollExcessHFDB
         case modalVector
+        case visionFeatures
     }
 
     public init(from decoder: Decoder) throws {
@@ -464,6 +468,7 @@ public struct ExtractedConsumerFeatures: Codable, Equatable, Sendable {
         self.latePreRollNoiseDBFS = try c.decodeIfPresent(Double.self, forKey: .latePreRollNoiseDBFS) ?? -82.0
         self.preRollExcessHFDB = try c.decodeIfPresent(Double.self, forKey: .preRollExcessHFDB) ?? 0.0
         self.modalVector = try c.decodeIfPresent(ModalVector4.self, forKey: .modalVector)
+        self.visionFeatures = try c.decodeIfPresent(VisionFeatureVector.self, forKey: .visionFeatures)
     }
 }
 
@@ -997,6 +1002,140 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
             )
         )
     ]
+
+    /// Additional consumer beverage classes resolved exclusively via v0.5.0 Multi-Modal Acoustic + Vision Fusion
+    /// (keeps `provisionalLibrary` untouched so Phase R2 frozen acoustic distances remain bit-for-bit identical).
+    public static let fusionSupplementaryProfiles: [ReferenceLiquidProfile] = [
+        ReferenceLiquidProfile(
+            id: "SELTZER_CARBONATED",
+            displayName: "Carbonated Seltzer",
+            formulaDisplay: "H₂O + CO₂(aq)",
+            categorySummary: "Effervescent Carbonated Water Profile",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Sparkling Water",
+                    roleDescription: "Clear aqueous base"
+                ),
+                ReferenceConstituent(
+                    symbol: "CO₂",
+                    name: "Dissolved Carbon Dioxide",
+                    roleDescription: "Active micro-bubble effervescence & HF scatter"
+                )
+            ],
+            expectedCentroidHz: 3_620.0,
+            expectedPeakHz: 2_380.0,
+            expectedMidToHighDB: 1.4,
+            expectedDecayDBPerSec: 84.0,
+            expectedHighScatterDB: -3.2,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + CO₂",
+                mappingSummary: "Bright sparkling Lydian arpeggio mapped to active CO₂ micro-bubble effervescence.",
+                baseFrequenciesHz: [392.00, 493.88, 659.25, 739.99, 987.77],
+                shimmerMultiplier: 1.34,
+                warmthDecayPerSec: 1.48
+            )
+        ),
+        ReferenceLiquidProfile(
+            id: "COLA_CARBONATED",
+            displayName: "Cola / Carbonated Soda",
+            formulaDisplay: "H₂O + CO₂ · Caramel",
+            categorySummary: "Effervescent Dark Carbonated Beverage",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O + CO₂",
+                    name: "Carbonated Base",
+                    roleDescription: "Active effervescence verified acoustically"
+                ),
+                ReferenceConstituent(
+                    symbol: "H₃PO₄ · Sugars",
+                    name: "Caramel & Acidulant Solutes",
+                    roleDescription: "Dark absorptive beverage phase"
+                )
+            ],
+            expectedCentroidHz: 3_240.0,
+            expectedPeakHz: 2_260.0,
+            expectedMidToHighDB: 2.0,
+            expectedDecayDBPerSec: 94.0,
+            expectedHighScatterDB: -3.5,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + CO₂",
+                mappingSummary: "Syncopated warm-root seventh chord with sparkling upper CO₂ overtones.",
+                baseFrequenciesHz: [293.66, 369.99, 440.00, 523.25, 880.00],
+                shimmerMultiplier: 1.28,
+                warmthDecayPerSec: 1.62
+            )
+        ),
+        ReferenceLiquidProfile(
+            id: "WINE_RED",
+            displayName: "Red Wine",
+            formulaDisplay: "H₂O + C₂H₅OH · Polyphenols",
+            categorySummary: "Fermented Aqueous-Ethanol Polyphenol Beverage",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Aqueous Base",
+                    roleDescription: "Primary fermented carrier"
+                ),
+                ReferenceConstituent(
+                    symbol: "C₂H₅OH",
+                    name: "Ethanol",
+                    roleDescription: "Fermented alcohol cosolvent"
+                ),
+                ReferenceConstituent(
+                    symbol: "Anthocyanins",
+                    name: "Ruby Polyphenol Pigments",
+                    roleDescription: "Characteristic ruby meniscus halo absorption"
+                )
+            ],
+            expectedCentroidHz: 2_790.0,
+            expectedPeakHz: 2_310.0,
+            expectedMidToHighDB: 2.4,
+            expectedDecayDBPerSec: 88.0,
+            expectedHighScatterDB: -7.8,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + C₂H₅OH",
+                mappingSummary: "Velvety D-minor ninth voicing mapped to fermented ethanol-polyphenol resonance.",
+                baseFrequenciesHz: [293.66, 349.23, 440.00, 523.25, 659.25],
+                shimmerMultiplier: 1.02,
+                warmthDecayPerSec: 1.82
+            )
+        ),
+        ReferenceLiquidProfile(
+            id: "TEA_AMBER",
+            displayName: "Iced Tea / Amber Brew",
+            formulaDisplay: "H₂O + Polyphenols",
+            categorySummary: "Translucent Amber Botanical Infusion",
+            constituents: [
+                ReferenceConstituent(
+                    symbol: "H₂O",
+                    name: "Brewed Water",
+                    roleDescription: "Clear aqueous carrier"
+                ),
+                ReferenceConstituent(
+                    symbol: "Tannins",
+                    name: "Botanical Polyphenols",
+                    roleDescription: "Translucent amber chromophores"
+                )
+            ],
+            expectedCentroidHz: 2_640.0,
+            expectedPeakHz: 2_290.0,
+            expectedMidToHighDB: 3.1,
+            expectedDecayDBPerSec: 85.0,
+            expectedHighScatterDB: -8.2,
+            tuneProfile: ChemicalTuneProfile(
+                formulaDisplay: "H₂O + Tannins",
+                mappingSummary: "Warm acoustic G-major pentatonic voicing.",
+                baseFrequenciesHz: [392.00, 440.00, 493.88, 587.33, 783.99],
+                shimmerMultiplier: 1.04,
+                warmthDecayPerSec: 1.66
+            )
+        )
+    ]
+
+    public static var fusionLibrary: [ReferenceLiquidProfile] {
+        provisionalLibrary + fusionSupplementaryProfiles
+    }
 }
 
 /// Persisted consumer-friendly scan item used by Result, Chemical Tune, Calibration, and History.
@@ -1039,6 +1178,7 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
     public let modeAScreeningState: ModeAScreeningState?
     public let deltaEmptyBaseline: DifferentialBaselineVector?
     public let deltaWaterBaseline: DifferentialBaselineVector?
+    public let fusionAttribution: MultiModalAttribution?
 
     public init(
         id: UUID = UUID(),
@@ -1078,7 +1218,8 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         conditioningTag: String? = nil,
         modeAScreeningState: ModeAScreeningState? = nil,
         deltaEmptyBaseline: DifferentialBaselineVector? = nil,
-        deltaWaterBaseline: DifferentialBaselineVector? = nil
+        deltaWaterBaseline: DifferentialBaselineVector? = nil,
+        fusionAttribution: MultiModalAttribution? = nil
     ) {
         self.id = id
         self.scannedAt = scannedAt
@@ -1123,6 +1264,7 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         self.modeAScreeningState = modeAScreeningState
         self.deltaEmptyBaseline = deltaEmptyBaseline
         self.deltaWaterBaseline = deltaWaterBaseline
+        self.fusionAttribution = fusionAttribution
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1134,7 +1276,7 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         case topCandidateName, topCandidateDistance, runnerUpTitle, runnerUpSimilarityPercent
         case secondCandidateDistance, winningMargin, allCandidateDistances, thumbnailJPEGData
         case isConditioningCycle, conditioningTag, modeAScreeningState
-        case deltaEmptyBaseline, deltaWaterBaseline
+        case deltaEmptyBaseline, deltaWaterBaseline, fusionAttribution
     }
 
     public init(from decoder: Decoder) throws {
@@ -1182,6 +1324,7 @@ public struct ConsumerScanItem: Codable, Equatable, Identifiable, Sendable {
         self.modeAScreeningState = try c.decodeIfPresent(ModeAScreeningState.self, forKey: .modeAScreeningState)
         self.deltaEmptyBaseline = try c.decodeIfPresent(DifferentialBaselineVector.self, forKey: .deltaEmptyBaseline)
         self.deltaWaterBaseline = try c.decodeIfPresent(DifferentialBaselineVector.self, forKey: .deltaWaterBaseline)
+        self.fusionAttribution = try c.decodeIfPresent(MultiModalAttribution.self, forKey: .fusionAttribution)
     }
 }
 
@@ -1977,7 +2120,8 @@ public enum BatchSteadyStateFeatureAggregator {
             opticsLocked: feats.allSatisfy(\.opticsLocked),
             latePreRollNoiseDBFS: med(feats.map(\.latePreRollNoiseDBFS), fallback: first.latePreRollNoiseDBFS),
             preRollExcessHFDB: med(feats.map(\.preRollExcessHFDB), fallback: first.preRollExcessHFDB),
-            modalVector: steadyMV
+            modalVector: steadyMV,
+            visionFeatures: first.visionFeatures
         )
 
         let geom = steadyItems.first?.geometryCondition

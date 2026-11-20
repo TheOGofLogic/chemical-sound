@@ -1007,6 +1007,428 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertNil(cam.latestTargetingThumbnail())
     }
 
+    // MARK: - v0.5.0 Multi-Modal Sensor Fusion & Guided 3-Step Cup Comparator Tests
+
+    func testV050_Scan63CookingOilWithEmptyBaselineResolvesFusedOilAndHonorsPureAcousticModeAOverride() throws {
+        let geom = GeometryTestCondition.stationary15InBaseline.rawValue
+        let goldenOilJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (216, 216, 216),
+            rimRGB: (82, 82, 82),
+            innerRGB: (232, 192, 32)
+        )
+
+        // Exact Build 14 iPhone Duo Empty Glass baseline (`R1_20X_20261119_151200`: [2836.4, 3418.6, 3637.6, 4314.4] Hz)
+        let emptyMV = ModalVector4(
+            frequenciesHz: [2_836.4, 3_418.6, 3_637.6, 4_314.4],
+            validityMask: [1, 1, 1, 1],
+            qualityFactorsQ: [18.0, 22.0, 25.0, 31.0],
+            qValidityMask: [1, 1, 1, 1],
+            decayAlphaPerSec: [82.0, 96.0, 74.0, 68.0],
+            decayDBPerSec: [712.0, 834.0, 643.0, 591.0],
+            decayRSquared: [0.89, 0.87, 0.90, 0.86],
+            decayValidityMask: [1, 1, 1, 1],
+            spectralAttenuationSlopeDBPerKHz: -1.10,
+            bubbleScatter55to85DB: -9.41
+        )
+        let emptyProto = CalibratedAcousticPrototype(
+            targetID: CalibratedAcousticPrototype.emptyContainerTargetID,
+            features: ExtractedConsumerFeatures(
+                activeSNRDB: 33.0, peakDBFS: -25.0, clippedSamples: 0,
+                dominantPeakHz: 2_836.4, spectralCentroidHz: 3_610.0,
+                midToHighBandDB: 2.8, decaySlopeDBPerSec: 712.0,
+                highFreqBubbleScatterDB: -9.41, preRollExcessHFDB: -5.2,
+                modalVector: emptyMV
+            ),
+            geometryCondition: geom
+        )
+
+        // Exact Scan 63 Cooking Oil modes ([2073.5, 3071.9, 4165.7, 4324.3] Hz -> max |Delta f/f| = 26.89%)
+        let oilMV = ModalVector4(
+            frequenciesHz: [2_073.5, 3_071.9, 4_165.7, 4_324.3],
+            validityMask: [1, 1, 1, 1],
+            qualityFactorsQ: [14.2, 16.5, 19.0, 24.0],
+            qValidityMask: [1, 1, 1, 1],
+            decayAlphaPerSec: [79.0, 64.0, 58.0, 72.0],
+            decayDBPerSec: [686.0, 556.0, 504.0, 625.0],
+            decayRSquared: [0.86, 0.88, 0.84, 0.89],
+            decayValidityMask: [1, 1, 1, 1],
+            spectralAttenuationSlopeDBPerKHz: -0.56,
+            bubbleScatter55to85DB: -10.61
+        )
+        let oilFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 34.2, peakDBFS: -24.1, clippedSamples: 0,
+            dominantPeakHz: 2_073.5, spectralCentroidHz: 3_210.0,
+            midToHighBandDB: 4.1, decaySlopeDBPerSec: 610.0,
+            highFreqBubbleScatterDB: -10.61, preRollExcessHFDB: -6.0,
+            modalVector: oilMV
+        )
+        let scan63Held = ConsumerScanItem(
+            scanSequenceNumber: 63,
+            geometryCondition: geom,
+            status: .unmatchedSignature,
+            title: "Liquid Loaded (Unmatched Class)",
+            formulaDisplay: "LIQUID_LOADED",
+            statusBadgeText: "MODE_A Screening • Liquid Loaded",
+            confidencePercent: nil,
+            scientificNote: "Held",
+            constituents: [],
+            tuneProfile: ReferenceLiquidProfile.provisionalLibrary[0].tuneProfile,
+            measuredPeakHz: 2_073.5,
+            measuredCentroidHz: 3_210.0,
+            measuredDecayDBPerSec: 610.0,
+            measuredFeatures: oilFeat,
+            thumbnailJPEGData: goldenOilJPEG
+        )
+
+        let classifier = OnDeviceAcousticClassifier()
+        // 1. Default v0.5.0 Multi-Modal Fusion resolves Cooking / Vegetable Oil with dual-channel attribution
+        let fused = classifier.reevaluateExistingItem(scan63Held, calibratedPrototypes: [emptyProto])
+        XCTAssertEqual(fused.status, .referenceMatch)
+        XCTAssertEqual(fused.title, "Cooking / Vegetable Oil")
+        XCTAssertEqual(fused.formulaDisplay, "Triglyceride")
+        XCTAssertNotNil(fused.fusionAttribution)
+        XCTAssertTrue(fused.fusionAttribution?.acousticEvidenceSummary.contains("26.90%") == true || fused.fusionAttribution?.acousticEvidenceSummary.contains("26.89%") == true)
+
+        // 2. Pure-Acoustic MODE_A override preserves frozen Build 14 screening holdback verbatim
+        let pureModeA = classifier.reevaluateExistingItem(
+            scan63Held,
+            calibratedPrototypes: [emptyProto],
+            inferenceModeOverride: .pureAcousticModeA
+        )
+        XCTAssertEqual(pureModeA.status, .unmatchedSignature)
+        XCTAssertEqual(pureModeA.title, "Liquid Loaded (Unmatched Class)")
+        XCTAssertNil(pureModeA.fusionAttribution)
+    }
+
+    func testV050_MilkRedWineCitrusJuiceAndColaVsCoffeeDisambiguateCleanly() throws {
+        let (ess, inv) = try Self.loadBundledESSAndInverse()
+        let classifier = OnDeviceAcousticClassifier()
+        var prng: UInt64 = 0x1234_5678_9ABC_DEF0
+        let cavityRec = Self.makeDeconvolvedChannelRecording(
+            ess: ess,
+            distanceInches: 14.0,
+            modes: [(2_240.0, 0.00042, 0.0034), (3_680.0, 0.00028, 0.0026)],
+            noiseRMS: 0.0014,
+            onsetJitterSamples: 0,
+            injectStartupTransient: false,
+            prng: &prng
+        )
+
+        // 1. Milk: High-albedo opaque white colloidal emulsion
+        let milkJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (214, 214, 214),
+            rimRGB: (106, 110, 118),
+            innerRGB: (244, 244, 242)
+        )
+        let milkRes = classifier.classifySamples(samples: cavityRec, inverseFilter: inv, thumbnailJPEGData: milkJPEG)
+        XCTAssertEqual(milkRes.status, .referenceMatch)
+        XCTAssertEqual(milkRes.title, "Milk")
+
+        // 2. Red Wine: Dark absorptive core with ruby/burgundy meniscus halo
+        let wineJPEG = try Self.makeSyntheticHaloReticleJPEG(
+            outerRGB: (216, 216, 216),
+            rimRGB: (188, 190, 194),
+            haloRGB: (168, 22, 52),
+            innerRGB: (38, 10, 18)
+        )
+        let wineRes = classifier.classifySamples(samples: cavityRec, inverseFilter: inv, thumbnailJPEGData: wineJPEG)
+        XCTAssertEqual(wineRes.status, .referenceMatch)
+        XCTAssertEqual(wineRes.title, "Red Wine")
+
+        // 3. Citrus / Fruit Juice: Chromatic orange pool
+        let juiceJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (216, 216, 216),
+            rimRGB: (176, 180, 184),
+            innerRGB: (242, 136, 22)
+        )
+        let juiceRes = classifier.classifySamples(samples: cavityRec, inverseFilter: inv, thumbnailJPEGData: juiceJPEG)
+        XCTAssertEqual(juiceRes.status, .referenceMatch)
+        XCTAssertEqual(juiceRes.title, "Citrus / Fruit Juice")
+
+        // 4. Black Coffee vs. Carbonated Cola on identical dark caramel frame split by acoustic BUBBLE_SCATTER_DETECTED
+        let darkCaramelJPEG = try Self.makeSyntheticHaloReticleJPEG(
+            outerRGB: (216, 216, 216),
+            rimRGB: (188, 190, 194),
+            haloRGB: (126, 78, 36),
+            innerRGB: (34, 24, 18)
+        )
+        let coffeeRes = classifier.classifySamples(samples: cavityRec, inverseFilter: inv, thumbnailJPEGData: darkCaramelJPEG)
+        XCTAssertEqual(coffeeRes.status, .referenceMatch)
+        XCTAssertEqual(coffeeRes.title, "Coffee / Dark Beverage")
+
+        let colaFizzFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 34.0, peakDBFS: -24.0, clippedSamples: 0,
+            dominantPeakHz: 2_260.0, spectralCentroidHz: 3_420.0,
+            midToHighBandDB: 1.5, decaySlopeDBPerSec: 690.0,
+            highFreqBubbleScatterDB: -2.1, preRollExcessHFDB: 3.4,
+            modalVector: ModalVector4(
+                frequenciesHz: [2_260.0, 3_680.0, nil, nil],
+                validityMask: [1, 1, 0, 0],
+                qualityFactorsQ: [15.0, 20.0, nil, nil],
+                qValidityMask: [1, 1, 0, 0],
+                decayAlphaPerSec: [80.0, 92.0, nil, nil],
+                decayDBPerSec: [695.0, 799.0, nil, nil],
+                decayRSquared: [0.85, 0.82, nil, nil],
+                decayValidityMask: [1, 1, 0, 0]
+            )
+        )
+        let heldDarkItem = ConsumerScanItem(
+            status: .unmatchedSignature,
+            title: "Unmatched Liquid",
+            formulaDisplay: "NO_VALIDATED_MATCH",
+            statusBadgeText: "Held",
+            confidencePercent: nil,
+            scientificNote: "Held",
+            constituents: [],
+            tuneProfile: ReferenceLiquidProfile.provisionalLibrary[0].tuneProfile,
+            measuredPeakHz: 2_260.0,
+            measuredCentroidHz: 3_420.0,
+            measuredDecayDBPerSec: 690.0,
+            measuredFeatures: colaFizzFeat,
+            thumbnailJPEGData: darkCaramelJPEG
+        )
+        let colaRes = classifier.reevaluateExistingItem(heldDarkItem, calibratedPrototypes: [])
+        XCTAssertEqual(colaRes.status, .referenceMatch)
+        XCTAssertEqual(colaRes.title, "Cola / Carbonated Soda")
+    }
+
+    func testV050_CarbonatedSeltzerVsUncalibratedClearWaterGuidance() throws {
+        let geom = GeometryTestCondition.stationary15InBaseline.rawValue
+        let clearCupJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (215, 215, 215),
+            rimRGB: (84, 88, 94),
+            innerRGB: (192, 195, 198)
+        )
+        let emptyMV = ModalVector4(
+            frequenciesHz: [2_836.4, 3_418.6, 3_637.6, 4_314.4],
+            validityMask: [1, 1, 1, 1],
+            qualityFactorsQ: [18.0, 22.0, 25.0, 31.0],
+            qValidityMask: [1, 1, 1, 1],
+            decayAlphaPerSec: [82.0, 96.0, 74.0, 68.0],
+            decayDBPerSec: [712.0, 834.0, 643.0, 591.0],
+            decayRSquared: [0.89, 0.87, 0.90, 0.86],
+            decayValidityMask: [1, 1, 1, 1]
+        )
+        let emptyProto = CalibratedAcousticPrototype(
+            targetID: CalibratedAcousticPrototype.emptyContainerTargetID,
+            features: ExtractedConsumerFeatures(
+                activeSNRDB: 33.0, peakDBFS: -25.0, clippedSamples: 0,
+                dominantPeakHz: 2_836.4, spectralCentroidHz: 3_610.0,
+                midToHighBandDB: 2.8, decaySlopeDBPerSec: 712.0,
+                highFreqBubbleScatterDB: -9.41, preRollExcessHFDB: -5.2,
+                modalVector: emptyMV
+            ),
+            geometryCondition: geom
+        )
+
+        let loadedMV = ModalVector4(
+            frequenciesHz: [2_380.0, 3_120.0, 3_590.0, 4_290.0],
+            validityMask: [1, 1, 1, 1],
+            qualityFactorsQ: [14.0, 19.0, 22.0, 27.0],
+            qValidityMask: [1, 1, 1, 1],
+            decayAlphaPerSec: [95.0, 110.0, 88.0, 76.0],
+            decayDBPerSec: [825.0, 955.0, 764.0, 660.0],
+            decayRSquared: [0.86, 0.84, 0.88, 0.85],
+            decayValidityMask: [1, 1, 1, 1]
+        )
+
+        // 1. Effervescent sparkling water (Delta S_HF = -5.8 - (-9.41) = +3.61 dB >= +2.5 dB AND preRollExcessHFDB = +2.9 > 0)
+        let seltzerFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 34.5, peakDBFS: -24.2, clippedSamples: 0,
+            dominantPeakHz: 2_380.0, spectralCentroidHz: 3_640.0,
+            midToHighBandDB: 1.4, decaySlopeDBPerSec: 825.0,
+            highFreqBubbleScatterDB: -5.80, preRollExcessHFDB: 2.9,
+            modalVector: loadedMV
+        )
+        let classifier = OnDeviceAcousticClassifier()
+        let baseItem = ConsumerScanItem(
+            geometryCondition: geom,
+            status: .unmatchedSignature,
+            title: "Unmatched",
+            formulaDisplay: "HELD",
+            statusBadgeText: "Held",
+            confidencePercent: nil,
+            scientificNote: "Held",
+            constituents: [],
+            tuneProfile: ReferenceLiquidProfile.provisionalLibrary[0].tuneProfile,
+            measuredPeakHz: 2_380.0,
+            measuredCentroidHz: 3_640.0,
+            measuredDecayDBPerSec: 825.0,
+            measuredFeatures: seltzerFeat,
+            thumbnailJPEGData: clearCupJPEG
+        )
+        let seltzerRes = classifier.reevaluateExistingItem(baseItem, calibratedPrototypes: [emptyProto])
+        XCTAssertEqual(seltzerRes.status, .referenceMatch)
+        XCTAssertEqual(seltzerRes.title, "Carbonated Seltzer")
+        XCTAssertEqual(seltzerRes.formulaDisplay, "H₂O + CO₂(aq)")
+
+        // 2. Still clear liquid without WATER_REFERENCE holds solute sub-claim and recommends Guided 3-Step Cup Comparator
+        let stillClearFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 34.5, peakDBFS: -24.2, clippedSamples: 0,
+            dominantPeakHz: 2_380.0, spectralCentroidHz: 3_380.0,
+            midToHighBandDB: 4.2, decaySlopeDBPerSec: 825.0,
+            highFreqBubbleScatterDB: -10.1, preRollExcessHFDB: -5.8,
+            modalVector: loadedMV
+        )
+        let stillItem = ConsumerScanItem(
+            geometryCondition: geom,
+            status: .unmatchedSignature,
+            title: "Unmatched",
+            formulaDisplay: "HELD",
+            statusBadgeText: "Held",
+            confidencePercent: nil,
+            scientificNote: "Held",
+            constituents: [],
+            tuneProfile: ReferenceLiquidProfile.provisionalLibrary[0].tuneProfile,
+            measuredPeakHz: 2_380.0,
+            measuredCentroidHz: 3_380.0,
+            measuredDecayDBPerSec: 825.0,
+            measuredFeatures: stillClearFeat,
+            thumbnailJPEGData: clearCupJPEG
+        )
+        let stillRes = classifier.reevaluateExistingItem(stillItem, calibratedPrototypes: [emptyProto])
+        XCTAssertEqual(stillRes.status, .unmatchedSignature)
+        XCTAssertEqual(stillRes.fusionAttribution?.recommendsGuidedComparator, true)
+    }
+
+    func testV050_Guided3StepCupComparatorSeparatesWaterVinegarAndSaline() throws {
+        let geom = GeometryTestCondition.stationary15InBaseline.rawValue
+        let steepMeniscusJPEG = try Self.makeSyntheticSideMeniscusJPEG(capillaryRisePx: 7.0)
+        let flatMeniscusJPEG = try Self.makeSyntheticSideMeniscusJPEG(capillaryRisePx: 0.0)
+
+        // Verify VisionFeatureExtractor meniscus contact-angle geometry directly
+        let extractor = VisionFeatureExtractor()
+        let waterVis = extractor.extract(jpegData: steepMeniscusJPEG)
+        let vinegarVis = extractor.extract(jpegData: flatMeniscusJPEG)
+        XCTAssertGreaterThanOrEqual(waterVis.meniscusEdgeStrength, 0.028)
+        XCTAssertLessThan(waterVis.meniscusContactAngleDegrees, 34.0)
+        XCTAssertGreaterThan(vinegarVis.meniscusContactAngleDegrees, 40.0)
+        XCTAssertNotNil(waterVis.estimatedFillFraction)
+
+        // Step 1: Empty Cup ([2836.4, 3418.6, 3637.6, 4314.4] Hz)
+        let emptyMV = ModalVector4(
+            frequenciesHz: [2_836.4, 3_418.6, 3_637.6, 4_314.4],
+            validityMask: [1, 1, 1, 1],
+            qualityFactorsQ: [18.0, 22.0, 25.0, 31.0],
+            qValidityMask: [1, 1, 1, 1],
+            decayAlphaPerSec: [82.0, 96.0, 74.0, 68.0],
+            decayDBPerSec: [712.0, 834.0, 643.0, 591.0],
+            decayRSquared: [0.89, 0.87, 0.90, 0.86],
+            decayValidityMask: [1, 1, 1, 1]
+        )
+        // Step 2: Water Blank ([1811.0, 3117.4, 3608.3, 4329.3] Hz)
+        let waterMV = ModalVector4(
+            frequenciesHz: [1_811.0, 3_117.4, 3_608.3, 4_329.3],
+            validityMask: [1, 1, 1, 1],
+            qualityFactorsQ: [14.0, 18.0, 23.0, 26.0],
+            qValidityMask: [1, 1, 1, 1],
+            decayAlphaPerSec: [85.0, 104.0, 90.0, 62.0],
+            decayDBPerSec: [738.0, 903.0, 782.0, 538.0],
+            decayRSquared: [0.86, 0.88, 0.90, 0.85],
+            decayValidityMask: [1, 1, 1, 1]
+        )
+        let comparatorBaselines = [
+            CalibratedAcousticPrototype(
+                targetID: CalibratedAcousticPrototype.emptyContainerTargetID,
+                features: ExtractedConsumerFeatures(
+                    activeSNRDB: 33.0, peakDBFS: -25.0, clippedSamples: 0,
+                    dominantPeakHz: 2_836.4, spectralCentroidHz: 3_610.0,
+                    midToHighBandDB: 2.8, decaySlopeDBPerSec: 712.0,
+                    highFreqBubbleScatterDB: -9.4, preRollExcessHFDB: -5.2,
+                    modalVector: emptyMV
+                ),
+                geometryCondition: geom
+            ),
+            CalibratedAcousticPrototype(
+                targetID: CalibratedAcousticPrototype.waterReferenceTargetID,
+                features: ExtractedConsumerFeatures(
+                    activeSNRDB: 34.0, peakDBFS: -24.5, clippedSamples: 0,
+                    dominantPeakHz: 1_811.0, spectralCentroidHz: 3_380.0,
+                    midToHighBandDB: 4.5, decaySlopeDBPerSec: 780.0,
+                    highFreqBubbleScatterDB: -10.1, preRollExcessHFDB: -6.0,
+                    modalVector: waterMV
+                ),
+                geometryCondition: geom
+            )
+        ]
+
+        func evaluateClearSample(freqs: [Double], jpeg: Data) -> ConsumerScanItem {
+            let mv = ModalVector4(
+                frequenciesHz: freqs.map { Optional($0) },
+                validityMask: [1, 1, 1, 1],
+                qualityFactorsQ: [14.0, 18.0, 22.0, 26.0],
+                qValidityMask: [1, 1, 1, 1],
+                decayAlphaPerSec: [84.0, 98.0, 86.0, 64.0],
+                decayDBPerSec: [729.0, 851.0, 747.0, 556.0],
+                decayRSquared: [0.86, 0.87, 0.89, 0.85],
+                decayValidityMask: [1, 1, 1, 1]
+            )
+            let feat = ExtractedConsumerFeatures(
+                activeSNRDB: 34.0, peakDBFS: -24.4, clippedSamples: 0,
+                dominantPeakHz: freqs[0], spectralCentroidHz: 3_350.0,
+                midToHighBandDB: 4.2, decaySlopeDBPerSec: 760.0,
+                highFreqBubbleScatterDB: -9.8, preRollExcessHFDB: -5.5,
+                modalVector: mv
+            )
+            let item = ConsumerScanItem(
+                geometryCondition: geom,
+                status: .unmatchedSignature,
+                title: "Unmatched",
+                formulaDisplay: "HELD",
+                statusBadgeText: "Held",
+                confidencePercent: nil,
+                scientificNote: "Held",
+                constituents: [],
+                tuneProfile: ReferenceLiquidProfile.provisionalLibrary[0].tuneProfile,
+                measuredPeakHz: freqs[0],
+                measuredCentroidHz: 3_350.0,
+                measuredDecayDBPerSec: 760.0,
+                measuredFeatures: feat,
+                thumbnailJPEGData: jpeg
+            )
+            return OnDeviceAcousticClassifier().reevaluateExistingItem(item, calibratedPrototypes: comparatorBaselines)
+        }
+
+        // Step 3A: Pure Water re-pour (~0.2% deviation from Water Blank, steep capillary rise) -> Water
+        let waterMatch = evaluateClearSample(freqs: [1_814.0, 3_112.0, 3_613.0, 4_324.0], jpeg: steepMeniscusJPEG)
+        XCTAssertEqual(waterMatch.status, .referenceMatch)
+        XCTAssertEqual(waterMatch.title, "Water")
+
+        // Step 3B: Vinegar / Acetic Acid (~ -2.3% modal shift vs. Water Blank + flatter meniscus) -> Vinegar
+        let vinegarMatch = evaluateClearSample(freqs: [1_764.0, 3_048.0, 3_525.0, 4_232.0], jpeg: flatMeniscusJPEG)
+        XCTAssertEqual(vinegarMatch.status, .referenceMatch)
+        XCTAssertEqual(vinegarMatch.title, "Vinegar")
+        XCTAssertEqual(vinegarMatch.formulaDisplay, "H₂O + CH₃COOH")
+
+        // Step 3C: Salt / Saline Water (~ +2.4% ionic velocity/density shift vs. Water Blank + steep meniscus) -> Salt / Saline Water
+        let salineMatch = evaluateClearSample(freqs: [1_862.0, 3_196.0, 3_691.0, 4_422.0], jpeg: steepMeniscusJPEG)
+        XCTAssertEqual(salineMatch.status, .referenceMatch)
+        XCTAssertEqual(salineMatch.title, "Salt / Saline Water")
+        XCTAssertEqual(salineMatch.formulaDisplay, "H₂O + NaCl")
+    }
+
+    func testV050_Flat2DSpoofAcousticsBlocksGoldenOilFalseClaim() throws {
+        // Synthetic broadband flat-spectrum noise lacking any 3D container cavity resonance
+        var flatNoise = [Float](repeating: 0.0, count: 24_000)
+        var prng: UInt64 = 0xCAFE_BABE_1357_2468
+        for i in 0..<24_000 {
+            let amp = (i < 7_200) ? 0.0003 : 0.06
+            flatNoise[i] = Float(amp * Self.nextGaussian(&prng))
+        }
+        let goldenOilJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (216, 216, 216),
+            rimRGB: (82, 82, 82),
+            innerRGB: (232, 192, 32)
+        )
+        let res = OnDeviceAcousticClassifier().classifySamples(
+            samples: flatNoise,
+            inverseFilter: nil,
+            thumbnailJPEGData: goldenOilJPEG
+        )
+        // Must NOT classify flat broadband noise + golden picture as Cooking / Vegetable Oil
+        XCTAssertNotEqual(res.title, "Cooking / Vegetable Oil")
+    }
+
     // MARK: - Helpers
 
     private static func loadBundledESSAndInverse() throws -> (ess: [Float], inv: [Float]) {
@@ -1224,6 +1646,71 @@ final class ConsumerExperienceTests: XCTestCase {
                     c = rimRGB
                 } else {
                     c = outerRGB
+                }
+                let idx = (y * size + x) * 4
+                rgba[idx] = c.0
+                rgba[idx + 1] = c.1
+                rgba[idx + 2] = c.2
+                rgba[idx + 3] = 255
+            }
+        }
+        return try encodeRGBA(rgba, size: size)
+    }
+
+    private static func makeSyntheticHaloReticleJPEG(
+        outerRGB: (UInt8, UInt8, UInt8),
+        rimRGB: (UInt8, UInt8, UInt8),
+        haloRGB: (UInt8, UInt8, UInt8),
+        innerRGB: (UInt8, UInt8, UInt8)
+    ) throws -> Data {
+        let size = 128
+        var rgba = [UInt8](repeating: 255, count: size * size * 4)
+        for y in 0..<size {
+            for x in 0..<size {
+                let dx = (Double(x) - 63.5) / 64.0
+                let dy = (Double(y) - 63.5) / 64.0
+                let r = sqrt(dx * dx + dy * dy)
+                let c: (UInt8, UInt8, UInt8)
+                if r <= 0.24 {
+                    c = innerRGB
+                } else if r <= 0.36 {
+                    c = haloRGB
+                } else if r <= 0.58 {
+                    c = rimRGB
+                } else {
+                    c = outerRGB
+                }
+                let idx = (y * size + x) * 4
+                rgba[idx] = c.0
+                rgba[idx + 1] = c.1
+                rgba[idx + 2] = c.2
+                rgba[idx + 3] = 255
+            }
+        }
+        return try encodeRGBA(rgba, size: size)
+    }
+
+    private static func makeSyntheticSideMeniscusJPEG(capillaryRisePx: Double) throws -> Data {
+        let size = 128
+        var rgba = [UInt8](repeating: 255, count: size * size * 4)
+        for y in 0..<size {
+            for x in 0..<size {
+                let dx = (Double(x) - 63.5) / 64.0
+                let dy = (Double(y) - 63.5) / 64.0
+                let r = sqrt(dx * dx + dy * dy)
+                let c: (UInt8, UInt8, UInt8)
+                if r > 0.58 {
+                    c = (216, 216, 216)
+                } else if r >= 0.40 {
+                    c = (88, 92, 98)
+                } else {
+                    let normWallX = min(1.2, abs(Double(x) - 63.5) / 22.0)
+                    let meniscusY = 64.0 - capillaryRisePx * (normWallX * normWallX)
+                    if Double(y) < meniscusY {
+                        c = (212, 214, 218)
+                    } else {
+                        c = (160, 164, 170)
+                    }
                 }
                 let idx = (y * size + x) * 4
                 rgba[idx] = c.0

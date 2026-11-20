@@ -69,6 +69,9 @@ public struct ConsumerScanFlowView: View {
                 }
             )
         }
+        .sheet(isPresented: $coordinator.isComparatorWizardPresented) {
+            LiquidComparatorWizardView(coordinator: coordinator)
+        }
     }
 
     // MARK: - 0. HOME Dashboard (Matches Visual Reference Poster — Camera OFF Until Requested)
@@ -160,6 +163,63 @@ public struct ConsumerScanFlowView: View {
                             )
                     )
                     .shadow(color: LiquidAnalyzerPalette.scanBlue.opacity(0.38), radius: 14, y: 6)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 18)
+
+                // Guided 3-Step Cup Comparator Card (Empty -> Water Blank -> Clear Liquid Identification)
+                Button(action: {
+                    coordinator.openGuidedComparatorWizard()
+                }) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "checklist.checked")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundStyle(LiquidAnalyzerPalette.resultGreenStart)
+                            .frame(width: 38, height: 38)
+                            .background(
+                                Circle()
+                                    .fill(LiquidAnalyzerPalette.resultGreenStart.opacity(0.14))
+                            )
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text("3-Step Cup Comparator")
+                                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color(red: 0.06, green: 0.13, blue: 0.26))
+
+                                if coordinator.hasEmptyBaselineForSelectedGeometry && coordinator.hasWaterBaselineForSelectedGeometry {
+                                    Text("READY")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(LiquidAnalyzerPalette.resultGreenStart)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            Capsule(style: .continuous)
+                                                .fill(LiquidAnalyzerPalette.resultGreenStart.opacity(0.14))
+                                        )
+                                }
+                            }
+                            Text("Lock Empty Cup & Water Blank to separate clear Water, Vinegar, Saline & Seltzer.")
+                                .font(.caption)
+                                .foregroundStyle(Color(red: 0.30, green: 0.36, blue: 0.46))
+                                .multilineTextAlignment(.leading)
+                        }
+
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Color(red: 0.40, green: 0.46, blue: 0.56))
+                    }
+                    .padding(15)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.white)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(LiquidAnalyzerPalette.resultGreenStart.opacity(0.28), lineWidth: 1)
+                            )
+                            .shadow(color: Color.black.opacity(0.05), radius: 8, y: 3)
+                    )
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 18)
@@ -811,6 +871,15 @@ public struct ConsumerScanFlowView: View {
 
                             PlatformThumbnailView(jpegData: item.thumbnailJPEGData, size: 118)
                                 .padding(.vertical, 2)
+
+                            if let attr = item.fusionAttribution {
+                                MultiModalAttributionCardView(
+                                    attribution: attr,
+                                    onOpenComparator: {
+                                        coordinator.openGuidedComparatorWizard()
+                                    }
+                                )
+                            }
 
                             if !item.constituents.isEmpty {
                                 VStack(alignment: .leading, spacing: 10) {

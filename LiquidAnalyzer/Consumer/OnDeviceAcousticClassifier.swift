@@ -10,18 +10,23 @@ public struct OnDeviceAcousticClassifier: Sendable {
     public let distanceThreshold: Double
     public let minimumWinningMargin: Double
     public let minimumSNRDB: Double
+    public let inferenceMode: ConsumerInferenceMode
     private let visualAnalyzer = VisualLiquidContextAnalyzer()
+    private let visionExtractor = VisionFeatureExtractor()
+    private let fusionClassifier = MultiModalFusionClassifier()
 
     public init(
         referenceLibrary: [ReferenceLiquidProfile] = ReferenceLiquidProfile.provisionalLibrary,
         distanceThreshold: Double = 0.75,
         minimumWinningMargin: Double = 0.11,
-        minimumSNRDB: Double = 1.8
+        minimumSNRDB: Double = 1.8,
+        inferenceMode: ConsumerInferenceMode = .multiModalFusion
     ) {
         self.referenceLibrary = referenceLibrary
         self.distanceThreshold = distanceThreshold
         self.minimumWinningMargin = minimumWinningMargin
         self.minimumSNRDB = minimumSNRDB
+        self.inferenceMode = inferenceMode
     }
 
     public func analyzeAndClassify(
@@ -43,7 +48,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
         sceneContextJPEGData: Data? = nil,
         opticsLocked: Bool = false,
         calibratedPrototypes: [CalibratedAcousticPrototype] = [],
-        latePreRollSilence: [Float]? = nil
+        latePreRollSilence: [Float]? = nil,
+        inferenceModeOverride: ConsumerInferenceMode? = nil
     ) throws -> ConsumerScanItem {
         let (samples, actualSR) = try Self.readMonoFloatSamplesAndRate(from: recordingURL)
         let inverse = inverseFilterURL.flatMap { try? Self.readMonoFloatSamplesAndRate(from: $0).samples }
@@ -67,7 +73,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
             sceneContextJPEGData: sceneContextJPEGData,
             opticsLocked: opticsLocked,
             calibratedPrototypes: calibratedPrototypes,
-            latePreRollSilence: latePreRollSilence
+            latePreRollSilence: latePreRollSilence,
+            inferenceModeOverride: inferenceModeOverride
         )
     }
 
@@ -91,9 +98,12 @@ public struct OnDeviceAcousticClassifier: Sendable {
         sceneContextJPEGData: Data? = nil,
         opticsLocked: Bool = false,
         calibratedPrototypes: [CalibratedAcousticPrototype] = [],
-        latePreRollSilence: [Float]? = nil
+        latePreRollSilence: [Float]? = nil,
+        inferenceModeOverride: ConsumerInferenceMode? = nil
     ) -> ConsumerScanItem {
+        let activeMode = inferenceModeOverride ?? inferenceMode
         let visual = visualAnalyzer.analyze(jpegData: thumbnailJPEGData, sceneContextJPEGData: sceneContextJPEGData)
+        let vision = visionExtractor.extract(jpegData: thumbnailJPEGData, sceneContextJPEGData: sceneContextJPEGData)
         let features = extractFeatures(
             samples: samples,
             inverseFilter: inverseFilter,
@@ -102,6 +112,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
             activeFrames: activeFrames,
             clippingCeilingDBFS: clippingCeilingDBFS,
             visual: visual,
+            vision: vision,
             opticsLocked: opticsLocked,
             latePreRollSilence: latePreRollSilence
         )
@@ -271,10 +282,72 @@ public struct OnDeviceAcousticClassifier: Sendable {
                thumbnailJPEGData: thumbnailJPEGData,
                deltaEmpty: deltaEmpty,
                deltaWater: deltaWater,
-               bubbleDetected: bubbleDetected
+               bubbleDetected: bubbleDetected,
+               vision: vision,
+               inferenceMode: activeMode
            ) {
             return calibratedResult
         }
+
+        // 3B. v0.5.0 Multi-Modal Sensor Fusion (VisionFeatureVector + DifferentialBaselineVector Mahalanobis Engine)
+        if let fused = fusionClassifier.evaluate(
+            features: features,
+            visual: visual,
+            vision: vision,
+            deltaEmpty: deltaEmpty,
+            deltaWater: deltaWater,
+            bubbleDetected: bubbleDetected,
+            hasInverseDeconv: hasInverseDeconv,
+            inferenceMode: activeMode
+        ) {
+            let runnerUp = fused.rankedCandidates.dropFirst().first
+            return ConsumerScanItem(
+                scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: fused.gateDecision,
+                rejectionReason: nil,
+                status: .referenceMatch,
+                title: fused.profile.displayName,
+                formulaDisplay: fused.profile.formulaDisplay,
+                statusBadgeText: fused.statusBadgeText,
+                confidencePercent: fused.confidencePercent,
+                scientificNote: fused.scientificNote,
+                constituents: fused.profile.constituents,
+                tuneProfile: fused.profile.tuneProfile,
+                measuredPeakHz: features.dominantPeakHz,
+                measuredCentroidHz: features.spectralCentroidHz,
+                measuredDecayDBPerSec: features.decaySlopeDBPerSec,
+                measuredFeatures: features,
+                topCandidateName: fused.profile.displayName,
+                topCandidateDistance: fused.attribution.mahalanobisDistance,
+                runnerUpTitle: runnerUp?.displayName,
+                secondCandidateDistance: runnerUp?.distance,
+                winningMargin: fused.attribution.winningMargin,
+                allCandidateDistances: fused.rankedCandidates.isEmpty ? allEntries : fused.rankedCandidates,
+                thumbnailJPEGData: thumbnailJPEGData,
+                modeAScreeningState: fused.screeningState,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater,
+                fusionAttribution: fused.attribution
+            )
+        }
+
+        let clearGuidance = (activeMode == .multiModalFusion)
+            ? MultiModalFusionClassifier.uncalibratedClearLiquidGuidance(
+                features: features,
+                vision: vision,
+                deltaEmpty: deltaEmpty,
+                deltaWater: deltaWater,
+                bubbleDetected: bubbleDetected
+            )
+            : nil
 
         // If an EMPTY_CONTAINER baseline is calibrated under matching geometry and shows a clear liquid mass-loading shift
         // (`|Delta f_i| >= 1.2%`) without matching a specific calibrated class standard, report `LIQUID_LOADED` screening
@@ -324,17 +397,18 @@ public struct OnDeviceAcousticClassifier: Sendable {
                     thumbnailJPEGData: thumbnailJPEGData,
                     modeAScreeningState: resolvedScreening,
                     deltaEmptyBaseline: deltaEmpty,
-                    deltaWaterBaseline: deltaWater
+                    deltaWaterBaseline: deltaWater,
+                    fusionAttribution: clearGuidance
                 )
             }
         }
 
-        // 4. Layer 2 Acoustic Specular Flat-Surface Guard
+        // 4. Layer 2 Acoustic Specular Flat-Surface / 2D Spoof Guard
+        let isFlatNonCavitySpectrum = (visual.vesselConfidence < 0.16 && features.spectralFlatness > 0.58 && features.peakProminenceDB < 7.5)
+            || (deltaEmpty == nil && features.spectralFlatness >= 0.48 && features.peakProminenceDB < 11.5)
         if visual.hint != .audioOnly &&
             !visual.hasBarcode &&
-            visual.vesselConfidence < 0.16 &&
-            features.spectralFlatness > 0.58 &&
-            features.peakProminenceDB < 7.5 {
+            isFlatNonCavitySpectrum {
             return buildSolidNonLiquidItem(
                 features: features,
                 scanSequenceNumber: scanSequenceNumber,
@@ -421,7 +495,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 thumbnailJPEGData: thumbnailJPEGData,
                 modeAScreeningState: screenState,
                 deltaEmptyBaseline: deltaEmpty,
-                deltaWaterBaseline: deltaWater
+                deltaWaterBaseline: deltaWater,
+                fusionAttribution: clearGuidance
             )
         }
 
@@ -675,17 +750,56 @@ public struct OnDeviceAcousticClassifier: Sendable {
         if targetID == CalibratedAcousticPrototype.solidSurfaceTargetID {
             return "Solid / Non-Liquid Material"
         }
-        return referenceLibrary.first(where: { $0.id == targetID })?.displayName ?? targetID
+        return ReferenceLiquidProfile.fusionLibrary.first(where: { $0.id == targetID })?.displayName ?? targetID
     }
 
     /// Re-evaluates an existing persisted `ConsumerScanItem` against newly saved `CalibratedAcousticPrototype`s
     /// without altering immutable raw measured features, timestamps, thumbnails, or sequence identifiers.
     public func reevaluateExistingItem(
         _ item: ConsumerScanItem,
-        calibratedPrototypes: [CalibratedAcousticPrototype]
+        calibratedPrototypes: [CalibratedAcousticPrototype],
+        inferenceModeOverride: ConsumerInferenceMode? = nil
     ) -> ConsumerScanItem {
-        guard let features = item.measuredFeatures, item.status != .unclearScan else {
+        guard var features = item.measuredFeatures, item.status != .unclearScan else {
             return item
+        }
+        let activeMode = inferenceModeOverride ?? inferenceMode
+        let visual = visualAnalyzer.analyze(jpegData: item.thumbnailJPEGData)
+        let vision = features.visionFeatures ?? visionExtractor.extract(jpegData: item.thumbnailJPEGData)
+        if features.visionFeatures == nil && vision.hasCameraFrame {
+            features = ExtractedConsumerFeatures(
+                activeSNRDB: features.activeSNRDB,
+                activeRMSDBFS: features.activeRMSDBFS,
+                peakDBFS: features.peakDBFS,
+                clippedSamples: features.clippedSamples,
+                dominantPeakHz: features.dominantPeakHz,
+                primaryPeakAmplitudeDB: features.primaryPeakAmplitudeDB,
+                secondaryPeaksHz: features.secondaryPeaksHz,
+                secondaryPeakAmplitudesDB: features.secondaryPeakAmplitudesDB,
+                spectralCentroidHz: features.spectralCentroidHz,
+                midToHighBandDB: features.midToHighBandDB,
+                decaySlopeDBPerSec: features.decaySlopeDBPerSec,
+                highFreqBubbleScatterDB: features.highFreqBubbleScatterDB,
+                spectralFlatness: features.spectralFlatness,
+                peakProminenceDB: features.peakProminenceDB,
+                cavityMultipathDB: features.cavityMultipathDB,
+                subBandShapeDB: features.subBandShapeDB,
+                echoReturnDB: features.echoReturnDB,
+                echoRMSDBFS: features.echoRMSDBFS,
+                tailSNRDB: features.tailSNRDB,
+                alignmentOffsetSamples: features.alignmentOffsetSamples,
+                echoArrivalDelayMs: features.echoArrivalDelayMs,
+                intraScanPersistenceRatio: features.intraScanPersistenceRatio,
+                featureVectorChecksum: features.featureVectorChecksum,
+                opticalCenterBrightness: features.opticalCenterBrightness,
+                opticalInteriorContrast: features.opticalInteriorContrast,
+                opticalRimContrast: features.opticalRimContrast,
+                opticsLocked: features.opticsLocked,
+                latePreRollNoiseDBFS: features.latePreRollNoiseDBFS,
+                preRollExcessHFDB: features.preRollExcessHFDB,
+                modalVector: features.modalVector,
+                visionFeatures: vision
+            )
         }
         let (deltaEmpty, deltaWater) = Self.computeBaselineShifts(
             features: features,
@@ -765,7 +879,9 @@ public struct OnDeviceAcousticClassifier: Sendable {
             thumbnailJPEGData: item.thumbnailJPEGData,
             deltaEmpty: deltaEmpty,
             deltaWater: deltaWater,
-            bubbleDetected: bubbleDetected
+            bubbleDetected: bubbleDetected,
+            vision: vision,
+            inferenceMode: activeMode
         ) {
             return ConsumerScanItem(
                 id: item.id,
@@ -805,9 +921,73 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 conditioningTag: item.conditioningTag,
                 modeAScreeningState: calibratedResult.modeAScreeningState,
                 deltaEmptyBaseline: deltaEmpty,
-                deltaWaterBaseline: deltaWater
+                deltaWaterBaseline: deltaWater,
+                fusionAttribution: calibratedResult.fusionAttribution
             )
         }
+
+        if let fused = fusionClassifier.evaluate(
+            features: features,
+            visual: visual,
+            vision: vision,
+            deltaEmpty: deltaEmpty,
+            deltaWater: deltaWater,
+            bubbleDetected: bubbleDetected,
+            hasInverseDeconv: features.modalVector != nil,
+            inferenceMode: activeMode
+        ) {
+            let runnerUp = fused.rankedCandidates.dropFirst().first
+            return ConsumerScanItem(
+                id: item.id,
+                scannedAt: item.scannedAt,
+                scanSequenceNumber: item.scanSequenceNumber,
+                batchRunID: item.batchRunID,
+                batchScanIndex: item.batchScanIndex,
+                batchTotalCount: item.batchTotalCount,
+                geometryCondition: item.geometryCondition,
+                controlSeriesTag: item.controlSeriesTag,
+                aeAfWbLockState: item.aeAfWbLockState,
+                targetLockState: item.targetLockState,
+                targetLockScore: item.targetLockScore,
+                gateDecision: fused.gateDecision,
+                rejectionReason: nil,
+                status: .referenceMatch,
+                title: fused.profile.displayName,
+                formulaDisplay: fused.profile.formulaDisplay,
+                statusBadgeText: fused.statusBadgeText,
+                confidencePercent: fused.confidencePercent,
+                scientificNote: fused.scientificNote,
+                constituents: fused.profile.constituents,
+                tuneProfile: fused.profile.tuneProfile,
+                measuredPeakHz: item.measuredPeakHz,
+                measuredCentroidHz: item.measuredCentroidHz,
+                measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+                measuredFeatures: features,
+                topCandidateName: fused.profile.displayName,
+                topCandidateDistance: fused.attribution.mahalanobisDistance,
+                runnerUpTitle: runnerUp?.displayName,
+                secondCandidateDistance: runnerUp?.distance,
+                winningMargin: fused.attribution.winningMargin,
+                allCandidateDistances: fused.rankedCandidates.isEmpty ? allEntries : fused.rankedCandidates,
+                thumbnailJPEGData: item.thumbnailJPEGData,
+                isConditioningCycle: item.isConditioningCycle,
+                conditioningTag: item.conditioningTag,
+                modeAScreeningState: fused.screeningState,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater,
+                fusionAttribution: fused.attribution
+            )
+        }
+
+        let clearGuidance = (activeMode == .multiModalFusion)
+            ? MultiModalFusionClassifier.uncalibratedClearLiquidGuidance(
+                features: features,
+                vision: vision,
+                deltaEmpty: deltaEmpty,
+                deltaWater: deltaWater,
+                bubbleDetected: bubbleDetected
+            )
+            : nil
 
         if let de = deltaEmpty, de.compatible {
             let validShifts = de.relativeFrequencyShifts.compactMap { $0 }.map { abs($0) }
@@ -865,7 +1045,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
                     conditioningTag: item.conditioningTag,
                     modeAScreeningState: resolvedScreening,
                     deltaEmptyBaseline: deltaEmpty,
-                    deltaWaterBaseline: deltaWater
+                    deltaWaterBaseline: deltaWater,
+                    fusionAttribution: clearGuidance
                 )
             }
         }
@@ -910,7 +1091,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
             conditioningTag: item.conditioningTag,
             modeAScreeningState: screenState,
             deltaEmptyBaseline: deltaEmpty,
-            deltaWaterBaseline: deltaWater
+            deltaWaterBaseline: deltaWater,
+            fusionAttribution: clearGuidance
         )
     }
 
@@ -931,7 +1113,9 @@ public struct OnDeviceAcousticClassifier: Sendable {
         thumbnailJPEGData: Data?,
         deltaEmpty: DifferentialBaselineVector? = nil,
         deltaWater: DifferentialBaselineVector? = nil,
-        bubbleDetected: Bool = false
+        bubbleDetected: Bool = false,
+        vision: VisionFeatureVector = .audioOnlyEmpty,
+        inferenceMode: ConsumerInferenceMode = .multiModalFusion
     ) -> ConsumerScanItem? {
         var grouped: [String: [ExtractedConsumerFeatures]] = [:]
         for proto in prototypes {
@@ -939,6 +1123,12 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 continue
             }
             grouped[proto.targetID, default: []].append(proto.features)
+        }
+
+        let hasExplicitNonWaterLiquidStandard = grouped.keys.contains { key in
+            key != CalibratedAcousticPrototype.emptyContainerTargetID &&
+                key != CalibratedAcousticPrototype.waterReferenceTargetID &&
+                key != CalibratedAcousticPrototype.solidSurfaceTargetID
         }
 
         let scoredTargets: [(targetID: String, distance: Double)] = grouped.map { targetID, feats in
@@ -1039,8 +1229,31 @@ public struct OnDeviceAcousticClassifier: Sendable {
             )
         }
 
-        guard let matchedProfile = referenceLibrary.first(where: { $0.id == bestTarget.targetID }) else {
+        guard let matchedProfile = ReferenceLiquidProfile.fusionLibrary.first(where: { $0.id == bestTarget.targetID }) else {
             return nil
+        }
+
+        // In v0.5.0 Multi-Modal & Comparator mode, when H2O_DIST was saved as the Water Reference Baseline
+        // (without explicit multi-liquid blind standards), defer to MultiModalFusionClassifier if the sample is
+        // effervescent, optically chromatic/turbid (Oil/Milk/Wine/Juice), or exhibits a >1.1% modal shift / vinegar meniscus!
+        if matchedProfile.id == CalibratedAcousticPrototype.waterReferenceTargetID && !hasExplicitNonWaterLiquidStandard {
+            if bubbleDetected { return nil }
+            if vision.hasCameraFrame && (vision.meanSaturationWB >= 0.22 || vision.opticalTurbidity >= 0.42) {
+                return nil
+            }
+            if inferenceMode == .multiModalFusion, let dw = deltaWater, dw.compatible {
+                let shifts = dw.relativeFrequencyShifts.compactMap { $0 }.map { abs($0) }
+                if !shifts.isEmpty {
+                    let meanAbs = shifts.reduce(0.0, +) / Double(shifts.count)
+                    let maxAbs = shifts.max() ?? 0.0
+                    if meanAbs > 0.011 || maxAbs > 0.018 {
+                        return nil
+                    }
+                    if vision.hasCameraFrame && vision.meniscusEdgeStrength >= 0.028 && vision.meniscusContactAngleDegrees >= 39.0 {
+                        return nil
+                    }
+                }
+            }
         }
 
         let note: String
@@ -1143,6 +1356,7 @@ public struct OnDeviceAcousticClassifier: Sendable {
         activeFrames: Int = 9_600,
         clippingCeilingDBFS: Double = -0.5,
         visual: VisualContextSummary = .audioOnlyDefault,
+        vision: VisionFeatureVector = .audioOnlyEmpty,
         opticsLocked: Bool = false,
         latePreRollSilence: [Float]? = nil
     ) -> ExtractedConsumerFeatures {
@@ -1699,7 +1913,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
             opticsLocked: opticsLocked,
             latePreRollNoiseDBFS: preDB,
             preRollExcessHFDB: preRollExcessHFDB,
-            modalVector: modalVector
+            modalVector: modalVector,
+            visionFeatures: vision.hasCameraFrame ? vision : nil
         )
     }
 
@@ -1780,7 +1995,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
         thumbnailJPEGData: Data?,
         modeAScreeningState: ModeAScreeningState = .noValidatedMatch,
         deltaEmptyBaseline: DifferentialBaselineVector? = nil,
-        deltaWaterBaseline: DifferentialBaselineVector? = nil
+        deltaWaterBaseline: DifferentialBaselineVector? = nil,
+        fusionAttribution: MultiModalAttribution? = nil
     ) -> ConsumerScanItem {
         let margin = (topEntry != nil && secondEntry != nil) ? (secondEntry!.distance - topEntry!.distance) : nil
         let gateSummary: String
@@ -1835,7 +2051,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
             thumbnailJPEGData: thumbnailJPEGData,
             modeAScreeningState: modeAScreeningState,
             deltaEmptyBaseline: deltaEmptyBaseline,
-            deltaWaterBaseline: deltaWaterBaseline
+            deltaWaterBaseline: deltaWaterBaseline,
+            fusionAttribution: fusionAttribution
         )
     }
 
