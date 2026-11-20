@@ -1,8 +1,8 @@
-# LA-V050-FUSION-PLAN-001: Multi-Modal Sensor Fusion & Guided 3-Step Cup Comparator (`v0.5.0` Build `15`)
+# LA-V050-FUSION-PLAN-001: Multi-Modal Sensor Fusion & Guided 3-Step Cup Comparator (v0.5.0 Build 16)
 
 - **Document ID:** `LA-V050-FUSION-PLAN-001`
-- **Status:** IMPLEMENTED ON `main` (Stability-Hardened; Awaiting macOS arm64 Runner Capacity Recovery for Full Matrix Verification)
-- **Release Target:** `v0.5.0` (`CFBundleVersion = 15`)
+- **Status:** VERIFIED ON PINNED XCODE 27.2 (Codemagic Build #18: 45/45 XCTests Passed; Bumped to Build 16 for TestFlight Ingestion)
+- **Release Target:** v0.5.0 (CFBundleVersion = 16; prior Build 15 uploaded via Codemagic Build #17)
 - **Frozen Pure-Acoustic Baseline:** `v0.4.1-build14-accepted` (`6d067cff97ef1641cce3772e72da0cd14ad593ca`)
 - **Pinned Toolchain:** `xcode: "27.2"` (`macOS 27.2`, `Swift 6.4.2`, zero floating `latest` tags; cross-checked on `macos-15` / Xcode `16.4` / Swift `6.1.2`)
 - **Related Phase R3 Hardware Spec:** [`LA-R3-SPEC-001.md`](LA-R3-SPEC-001.md) (`MODE_B` External Wall-Coupled Ultrasonic Transducer — isolated future hardware track)
@@ -31,5 +31,8 @@ Following the initial `v0.5.0` implementation (`db000bf`, `57a40f8`), four targe
 ---
 
 ## 3. Verification & CI Status
-- **Baseline v0.5.0 Run #28 (`57a40f8`):** `macos-26` **passed** (`44 / 44` Swift XCTests, `0` failures; unsigned iOS IPA built cleanly at `1.5 MB`). `macos-15` failed exclusively on `ConsumerScanCoordinator.swift:395` (remediated in `8a4d43f`).
-- **Post-Hardening Verification (`9f45758`, `45` XCTests):** Ready for full `macos-15` + `macos-26` matrix confirmation once GitHub Actions hosted macOS `arm64` runner capacity recovers (Runs `#29`–`#32` were queued/cancelled due to hosted macOS `arm64` runner capacity constraints prior to executing any build steps).
+- **Codemagic Build #18 (`a8b8168`, `Mac mini M2`):** **PASSED** all build, test, code-signing, and IPA steps on pinned `Xcode 27.2` (`27B52`) / `macOS 27.2` (`26B123`) / `Apple Swift 6.4.2`:
+  - **XCTest Verification Gate (`1m 38s`):** **`45 / 45` tests passed (`0` failures, `0` unexpected) in `70.25s`**, including the new stability regression test `testV050_StabilityGuards_AttributionCodableDarkFrameAndWarmLightingMilk` (`0.009s`).
+  - **Signed IPA Artifact (`40s`):** Generated `LiquidAnalyzer.ipa` (`2.07 MB`) and `chemical-sound_18_artifacts.zip` (`23.94 KB`).
+  - **Publishing Note:** App Store Connect returned `HTTP 409` (`ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE`) because `CFBundleVersion = 15` was already uploaded by Build #17. `CFBundleVersion` was bumped `15 -> 16` (`LiquidAnalyzer/Info.plist` + `codemagic.yaml`) for clean TestFlight ingestion in Codemagic Build #19.
+- **Baseline v0.5.0 Run #28 (`57a40f8`):** GitHub Actions `macos-26` passed (`44 / 44` XCTests + `1.5 MB` unsigned IPA); `macos-15` failed solely at `ConsumerScanCoordinator.swift:395` (remediated in `8a4d43f`). Subsequent GitHub Actions runs (`#29`–`#35`) were cancelled prior to step execution due to GitHub hosted macOS `arm64` runner capacity constraints.
