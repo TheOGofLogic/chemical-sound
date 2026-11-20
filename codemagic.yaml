@@ -1,6 +1,6 @@
 workflows:
   liquid-analyzer-testflight:
-    name: Liquid Analyzer v0.5.0 — Multi-Modal Fusion & Comparator Release (Build 15)
+    name: Liquid Analyzer v0.5.0 — Multi-Modal Fusion & Comparator Release (Build 16)
     instance_type: mac_mini_m2
     max_build_duration: 30
     integrations:
@@ -18,7 +18,7 @@ workflows:
         script: |
           set -euo pipefail
           {
-            echo "=== LIQUID ANALYZER v0.5.0 (BUILD 15) TOOLCHAIN MANIFEST ==="
+            echo "=== LIQUID ANALYZER v0.5.0 (BUILD 16) TOOLCHAIN MANIFEST ==="
             sw_vers
             xcodebuild -version
             xcodebuild -showsdks | grep -E "iphoneos|macosx" || true
@@ -69,7 +69,7 @@ workflows:
         submit_to_testflight: false
 
   liquid-analyzer-m3b-macos:
-    name: Liquid Analyzer v0.5.0 — macOS XCTest & Unsigned iOS IPA (Build 15)
+    name: Liquid Analyzer v0.5.0 — macOS XCTest & Unsigned iOS IPA (Build 16)
     instance_type: mac_mini_m2
     max_build_duration: 30
     environment:
