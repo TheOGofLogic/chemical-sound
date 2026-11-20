@@ -796,7 +796,9 @@ public struct ConsumerMoreView: View {
                     LabeledContent("Saved Acoustic Standards", value: "\(consumer.calibratedPrototypes.count)")
                     Button {
                         consumer.selectedTab = .scan
-                        consumer.openGuidedComparatorWizard()
+                        DispatchQueue.main.async {
+                            consumer.openGuidedComparatorWizard()
+                        }
                     } label: {
                         Label("Open 3-Step Cup Comparator", systemImage: "checklist.checked")
                     }
@@ -823,7 +825,10 @@ public struct ConsumerMoreView: View {
 
                 Section("About") {
                     LabeledContent("Application", value: "Liquid Analyzer")
-                    LabeledContent("Version", value: "0.5.0 (Build 15 • Multi-Modal Fusion)")
+                    LabeledContent(
+                        "Version",
+                        value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.0") (Build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "17") • Multi-Modal Fusion)"
+                    )
                 }
             }
             .navigationTitle("More")
