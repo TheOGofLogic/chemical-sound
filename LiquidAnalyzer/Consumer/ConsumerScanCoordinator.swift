@@ -392,64 +392,64 @@ public final class ConsumerScanCoordinator: ObservableObject {
             let vTurbStr = vf.map { String(format: "%.3f", $0.opticalTurbidity) } ?? ""
             let vMeniscusStr = vf.map { String(format: "%.1f", $0.meniscusContactAngleDegrees) } ?? ""
             let fusionModeStr = item.fusionAttribution?.inferenceMode ?? ""
-            let row = [
-                "\(seq)",
-                Self.csvEscape(item.batchRunID ?? ""),
-                item.batchScanIndex.map { "\($0)" } ?? "1",
-                item.batchTotalCount.map { "\($0)" } ?? "1",
-                iso,
-                Self.csvEscape(item.geometryCondition ?? GeometryTestCondition.handheldGeneral.rawValue),
-                Self.csvEscape(item.controlSeriesTag ?? ControlSeriesTag.unlabeledBlind.rawValue),
-                Self.csvEscape(item.aeAfWbLockState ?? ""),
-                Self.csvEscape(item.targetLockState ?? ""),
-                item.targetLockScore.map { String(format: "%.2f", $0) } ?? "",
-                item.status.rawValue,
-                Self.csvEscape(item.gateDecision ?? ""),
-                Self.csvEscape(item.rejectionReason ?? ""),
-                Self.csvEscape(item.title),
-                String(format: "%.2f", item.measuredPeakHz),
-                String(format: "%.2f", f?.primaryPeakAmplitudeDB ?? 0.0),
-                Self.csvEscape(secPeaks),
-                Self.csvEscape(secAmps),
-                String(format: "%.3f", f?.intraScanPersistenceRatio ?? 0.0),
-                String(format: "%.2f", item.measuredCentroidHz),
-                String(format: "%.2f", f?.activeRMSDBFS ?? 0.0),
-                String(format: "%.2f", f?.peakDBFS ?? 0.0),
-                String(format: "%.2f", f?.activeSNRDB ?? 0.0),
-                String(format: "%.2f", f?.echoRMSDBFS ?? 0.0),
-                String(format: "%.2f", f?.echoReturnDB ?? 0.0),
-                String(format: "%.2f", f?.tailSNRDB ?? 0.0),
-                "\(f?.alignmentOffsetSamples ?? 0)",
-                String(format: "%.2f", f?.echoArrivalDelayMs ?? 0.0),
-                String(format: "%.2f", f?.highFreqBubbleScatterDB ?? 0.0),
-                String(format: "%.2f", item.measuredDecayDBPerSec),
-                String(format: "%.2f", f?.cavityMultipathDB ?? 0.0),
-                f?.featureVectorChecksum ?? "",
-                Self.csvEscape(subBands),
-                Self.csvEscape(item.topCandidateName ?? ""),
-                item.topCandidateDistance.map { String(format: "%.4f", $0) } ?? "",
-                Self.csvEscape(item.runnerUpTitle ?? ""),
-                item.secondCandidateDistance.map { String(format: "%.4f", $0) } ?? "",
-                item.winningMargin.map { String(format: "%.4f", $0) } ?? "",
-                Self.csvEscape(allScores),
-                item.isConditioningCycle ? "true" : "false",
-                Self.csvEscape(item.modeAScreeningState?.rawValue ?? ""),
-                Self.csvEscape(modalFreqs),
-                Self.csvEscape(modalMask),
-                Self.csvEscape(modalQs),
-                Self.csvEscape(modalAlphas),
-                sAttStr,
-                latePreStr,
-                Self.csvEscape(dEmptyPct),
-                Self.csvEscape(dWaterPct),
-                deltaSHFStr,
-                vHueStr,
-                vSatStr,
-                vTurbStr,
-                vMeniscusStr,
-                Self.csvEscape(fusionModeStr)
-            ].joined(separator: ",")
-            lines.append(row)
+            var columns: [String] = []
+            columns.reserveCapacity(55)
+            columns.append("\(seq)")
+            columns.append(Self.csvEscape(item.batchRunID ?? ""))
+            columns.append(item.batchScanIndex.map { "\($0)" } ?? "1")
+            columns.append(item.batchTotalCount.map { "\($0)" } ?? "1")
+            columns.append(iso)
+            columns.append(Self.csvEscape(item.geometryCondition ?? GeometryTestCondition.handheldGeneral.rawValue))
+            columns.append(Self.csvEscape(item.controlSeriesTag ?? ControlSeriesTag.unlabeledBlind.rawValue))
+            columns.append(Self.csvEscape(item.aeAfWbLockState ?? ""))
+            columns.append(Self.csvEscape(item.targetLockState ?? ""))
+            columns.append(item.targetLockScore.map { String(format: "%.2f", $0) } ?? "")
+            columns.append(item.status.rawValue)
+            columns.append(Self.csvEscape(item.gateDecision ?? ""))
+            columns.append(Self.csvEscape(item.rejectionReason ?? ""))
+            columns.append(Self.csvEscape(item.title))
+            columns.append(String(format: "%.2f", item.measuredPeakHz))
+            columns.append(String(format: "%.2f", f?.primaryPeakAmplitudeDB ?? 0.0))
+            columns.append(Self.csvEscape(secPeaks))
+            columns.append(Self.csvEscape(secAmps))
+            columns.append(String(format: "%.3f", f?.intraScanPersistenceRatio ?? 0.0))
+            columns.append(String(format: "%.2f", item.measuredCentroidHz))
+            columns.append(String(format: "%.2f", f?.activeRMSDBFS ?? 0.0))
+            columns.append(String(format: "%.2f", f?.peakDBFS ?? 0.0))
+            columns.append(String(format: "%.2f", f?.activeSNRDB ?? 0.0))
+            columns.append(String(format: "%.2f", f?.echoRMSDBFS ?? 0.0))
+            columns.append(String(format: "%.2f", f?.echoReturnDB ?? 0.0))
+            columns.append(String(format: "%.2f", f?.tailSNRDB ?? 0.0))
+            columns.append("\(f?.alignmentOffsetSamples ?? 0)")
+            columns.append(String(format: "%.2f", f?.echoArrivalDelayMs ?? 0.0))
+            columns.append(String(format: "%.2f", f?.highFreqBubbleScatterDB ?? 0.0))
+            columns.append(String(format: "%.2f", item.measuredDecayDBPerSec))
+            columns.append(String(format: "%.2f", f?.cavityMultipathDB ?? 0.0))
+            columns.append(f?.featureVectorChecksum ?? "")
+            columns.append(Self.csvEscape(subBands))
+            columns.append(Self.csvEscape(item.topCandidateName ?? ""))
+            columns.append(item.topCandidateDistance.map { String(format: "%.4f", $0) } ?? "")
+            columns.append(Self.csvEscape(item.runnerUpTitle ?? ""))
+            columns.append(item.secondCandidateDistance.map { String(format: "%.4f", $0) } ?? "")
+            columns.append(item.winningMargin.map { String(format: "%.4f", $0) } ?? "")
+            columns.append(Self.csvEscape(allScores))
+            columns.append(item.isConditioningCycle ? "true" : "false")
+            columns.append(Self.csvEscape(item.modeAScreeningState?.rawValue ?? ""))
+            columns.append(Self.csvEscape(modalFreqs))
+            columns.append(Self.csvEscape(modalMask))
+            columns.append(Self.csvEscape(modalQs))
+            columns.append(Self.csvEscape(modalAlphas))
+            columns.append(sAttStr)
+            columns.append(latePreStr)
+            columns.append(Self.csvEscape(dEmptyPct))
+            columns.append(Self.csvEscape(dWaterPct))
+            columns.append(deltaSHFStr)
+            columns.append(vHueStr)
+            columns.append(vSatStr)
+            columns.append(vTurbStr)
+            columns.append(vMeniscusStr)
+            columns.append(Self.csvEscape(fusionModeStr))
+            lines.append(columns.joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
     }
