@@ -21,9 +21,9 @@ public struct MultiModalAttribution: Codable, Equatable, Sendable {
     public let acousticEvidenceSummary: String
     public let visionEvidenceSummary: String
     public let comparatorEvidenceSummary: String?
-    public let mahalanobisDistance: Double
-    public let secondBestDistance: Double
-    public let winningMargin: Double
+    public let mahalanobisDistance: Double?
+    public let secondBestDistance: Double?
+    public let winningMargin: Double?
     public let recommendsGuidedComparator: Bool
 
     public init(
@@ -31,9 +31,9 @@ public struct MultiModalAttribution: Codable, Equatable, Sendable {
         acousticEvidenceSummary: String,
         visionEvidenceSummary: String,
         comparatorEvidenceSummary: String? = nil,
-        mahalanobisDistance: Double,
-        secondBestDistance: Double,
-        winningMargin: Double,
+        mahalanobisDistance: Double? = nil,
+        secondBestDistance: Double? = nil,
+        winningMargin: Double? = nil,
         recommendsGuidedComparator: Bool = false
     ) {
         self.inferenceMode = inferenceMode
@@ -321,7 +321,7 @@ public struct MultiModalFusionClassifier: Sendable {
         bubbleDetected: Bool
     ) -> MultiModalAttribution? {
         guard vision.hasCameraFrame else { return nil }
-        let isClear = vision.meanSaturationWB < 0.22 && vision.opticalTurbidity < 0.42 && !bubbleDetected
+        let isClear = vision.meanSaturationWB < 0.22 && vision.opticalTurbidity < 0.42 && vision.meanValueBrightness >= 0.24 && !bubbleDetected
         let missingWaterRef = (deltaWater == nil) || (deltaWater?.compatible == false)
         guard isClear && missingWaterRef else { return nil }
 
@@ -347,9 +347,9 @@ public struct MultiModalFusionClassifier: Sendable {
             comparatorEvidenceSummary: deltaEmpty != nil
                 ? "Step 1 (Empty Cup) locked — lock Step 2 (Water Blank) to separate Water, Vinegar & Saline."
                 : "Use the 3-Step Cup Comparator (Empty -> Water -> Sample) to separate clear Water, Vinegar & Saline.",
-            mahalanobisDistance: .nan,
-            secondBestDistance: .nan,
-            winningMargin: .nan,
+            mahalanobisDistance: nil,
+            secondBestDistance: nil,
+            winningMargin: nil,
             recommendsGuidedComparator: true
         )
     }
@@ -460,7 +460,7 @@ public struct MultiModalFusionClassifier: Sendable {
             results.append((tea, dist))
         }
 
-        return results.sorted { $0.distance < $1.distance }
+        return results.filter { $0.distance.isFinite }.sorted { $0.distance < $1.distance }
     }
 
     private static func scoreComparativeClearAqueousCandidates(
@@ -492,7 +492,7 @@ public struct MultiModalFusionClassifier: Sendable {
             let tooCloseToWaterPenalty = meanAbs < 0.010 ? ((0.012 - meanAbs) / 0.004) : 0.0
             let zSigned = signedMean <= -0.004
                 ? abs(signedMean - (-0.022)) / 0.026
-                : (0.85 + signedMean / 0.018)
+                : (0.85 + max(0.0, signedMean + 0.004) / 0.018)
             let zMeniscus = hasMeniscus
                 ? abs(theta - 44.0) / 9.0
                 : 0.35
@@ -505,7 +505,7 @@ public struct MultiModalFusionClassifier: Sendable {
             let tooCloseToWaterPenalty = meanAbs < 0.011 ? ((0.013 - meanAbs) / 0.004) : 0.0
             let zSigned = signedMean >= 0.004
                 ? abs(signedMean - 0.024) / 0.026
-                : (0.95 + abs(signedMean) / 0.018)
+                : (0.95 + max(0.0, 0.004 - signedMean) / 0.018)
             let zMeniscus = hasMeniscus
                 ? abs(theta - 24.5) / 9.0
                 : 0.35
@@ -513,7 +513,7 @@ public struct MultiModalFusionClassifier: Sendable {
             out.append((saline, dist))
         }
 
-        return out.sorted { $0.distance < $1.distance }
+        return out.filter { $0.distance.isFinite }.sorted { $0.distance < $1.distance }
     }
 
     private static func profileIDForExplicitLabel(_ hint: VisualLiquidHint, bubbleDetected: Bool) -> String? {
@@ -549,8 +549,11 @@ public struct MultiModalFusionClassifier: Sendable {
     }
 
     private static func confidenceFromMahalanobis(distance: Double, margin: Double) -> Int {
+        guard distance.isFinite, margin.isFinite else { return 70 }
         let fit = exp(-0.34 * max(0.0, distance))
         let sep = 0.84 + 0.16 * min(1.0, max(0.0, margin) / 0.85)
-        return min(96, max(70, Int(round(fit * sep * 96.0))))
+        let raw = fit * sep * 96.0
+        guard raw.isFinite else { return 70 }
+        return min(96, max(70, Int(round(raw))))
     }
 }
