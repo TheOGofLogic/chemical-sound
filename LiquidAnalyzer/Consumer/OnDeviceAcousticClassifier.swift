@@ -349,58 +349,124 @@ public struct OnDeviceAcousticClassifier: Sendable {
             )
             : nil
 
-        // If an EMPTY_CONTAINER baseline is calibrated under matching geometry and shows a clear liquid mass-loading shift
-        // (`|Delta f_i| >= 1.2%`) without matching a specific calibrated class standard, report `LIQUID_LOADED` screening
-        if let de = deltaEmpty, de.compatible {
-            let validShifts = de.relativeFrequencyShifts.compactMap { $0 }.map { abs($0) }
-            if let maxShift = validShifts.max(), maxShift >= 0.012 {
-                let resolvedScreening: ModeAScreeningState = bubbleDetected ? .bubbleScatterDetected : .liquidLoaded
-                let badge = bubbleDetected
-                    ? "MODE_A Screening • Bubble Scatter Detected"
-                    : "MODE_A Screening • Liquid Loaded"
-                let titleText = bubbleDetected ? "Bubble-Active Liquid" : "Liquid Loaded (Unmatched Class)"
-                let noteText = String(
-                    format: "Calibrated container shift detected (max |Δf/f| = %.2f%% vs. Empty Container%@). No uncalibrated molecular or viscosity claim is asserted.",
-                    maxShift * 100.0,
-                    bubbleDetected ? "; micro-bubble high-frequency scatter detected" : ""
-                )
-                return ConsumerScanItem(
-                    scanSequenceNumber: scanSequenceNumber,
-                    batchRunID: batchRunID,
-                    batchScanIndex: batchScanIndex,
-                    batchTotalCount: batchTotalCount,
-                    geometryCondition: geometryCondition,
-                    controlSeriesTag: controlSeriesTag,
-                    aeAfWbLockState: resolvedOpticsState,
-                    targetLockState: resolvedTargetState,
-                    targetLockScore: targetLockScore,
-                    gateDecision: resolvedScreening.rawValue,
-                    rejectionReason: "UNCALIBRATED_CLASS_HELD",
-                    status: .unmatchedSignature,
-                    title: titleText,
-                    formulaDisplay: resolvedScreening.rawValue,
-                    statusBadgeText: badge,
-                    confidencePercent: nil,
-                    scientificNote: noteText,
-                    constituents: [],
-                    tuneProfile: Self.buildAcousticSignatureTune(features: features, formula: "Liquid Loaded"),
-                    measuredPeakHz: features.dominantPeakHz,
-                    measuredCentroidHz: features.spectralCentroidHz,
-                    measuredDecayDBPerSec: features.decaySlopeDBPerSec,
-                    measuredFeatures: features,
-                    topCandidateName: allEntries.first?.displayName,
-                    topCandidateDistance: allEntries.first?.distance,
-                    runnerUpTitle: allEntries.dropFirst().first?.displayName,
-                    secondCandidateDistance: allEntries.dropFirst().first?.distance,
-                    winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
-                    allCandidateDistances: allEntries,
-                    thumbnailJPEGData: thumbnailJPEGData,
-                    modeAScreeningState: resolvedScreening,
-                    deltaEmptyBaseline: deltaEmpty,
-                    deltaWaterBaseline: deltaWater,
-                    fusionAttribution: clearGuidance
-                )
-            }
+        // If an EMPTY_CONTAINER baseline is calibrated under matching geometry, require an EXPLICIT liquid mass-loading
+        // delta before claiming `LIQUID_LOADED`. Dry shell resonances classify as `Empty Container / Low Coupling`,
+        // and stale/shifted baselines prompt fresh Step 1 calibration instead of misclassifying as liquid.
+        switch Self.evaluateEmptyBaselineLoadState(features: features, deltaEmpty: deltaEmpty) {
+        case .explicitLiquidLoad(let maxShift, _):
+            let resolvedScreening: ModeAScreeningState = bubbleDetected ? .bubbleScatterDetected : .liquidLoaded
+            let badge = bubbleDetected
+                ? "MODE_A Screening • Bubble Scatter Detected"
+                : "MODE_A Screening • Liquid Loaded"
+            let titleText = bubbleDetected ? "Bubble-Active Liquid" : "Liquid Loaded (Unmatched Class)"
+            let noteText = String(
+                format: "Calibrated container load shift detected (max |Δf/f| = %.2f%% vs. Empty Container%@). No uncalibrated molecular or viscosity claim is asserted.",
+                maxShift * 100.0,
+                bubbleDetected ? "; micro-bubble high-frequency scatter detected" : ""
+            )
+            return ConsumerScanItem(
+                scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: resolvedScreening.rawValue,
+                rejectionReason: "UNCALIBRATED_CLASS_HELD",
+                status: .unmatchedSignature,
+                title: titleText,
+                formulaDisplay: resolvedScreening.rawValue,
+                statusBadgeText: badge,
+                confidencePercent: nil,
+                scientificNote: noteText,
+                constituents: [],
+                tuneProfile: Self.buildAcousticSignatureTune(features: features, formula: "Liquid Loaded"),
+                measuredPeakHz: features.dominantPeakHz,
+                measuredCentroidHz: features.spectralCentroidHz,
+                measuredDecayDBPerSec: features.decaySlopeDBPerSec,
+                measuredFeatures: features,
+                topCandidateName: allEntries.first?.displayName,
+                topCandidateDistance: allEntries.first?.distance,
+                runnerUpTitle: allEntries.dropFirst().first?.displayName,
+                secondCandidateDistance: allEntries.dropFirst().first?.distance,
+                winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
+                allCandidateDistances: allEntries,
+                thumbnailJPEGData: thumbnailJPEGData,
+                modeAScreeningState: resolvedScreening,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater,
+                fusionAttribution: clearGuidance
+            )
+
+        case .withinDryContainerShell(let meanShift):
+            return ConsumerScanItem(
+                scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: "EMPTY_CONTAINER_DRY_SHELL",
+                rejectionReason: nil,
+                status: .emptyContainer,
+                title: "Empty Container / Low Coupling",
+                formulaDisplay: "No Fluid Detected",
+                statusBadgeText: "Dry Container Shell • No Liquid Load",
+                confidencePercent: max(72, min(95, Int(round((1.0 - min(0.25, meanShift * 4.0)) * 95.0)))),
+                scientificNote: String(
+                    format: "Resonance stays within your dry Empty Container baseline (mean |Δf/f| = %.2f%%). No fluid loading detected.",
+                    meanShift * 100.0
+                ),
+                constituents: [],
+                tuneProfile: Self.buildAcousticSignatureTune(features: features, formula: "Container Shell"),
+                measuredPeakHz: features.dominantPeakHz,
+                measuredCentroidHz: features.spectralCentroidHz,
+                measuredDecayDBPerSec: features.decaySlopeDBPerSec,
+                measuredFeatures: features,
+                topCandidateName: "Empty Container",
+                topCandidateDistance: meanShift,
+                runnerUpTitle: allEntries.first?.displayName,
+                secondCandidateDistance: allEntries.first?.distance,
+                winningMargin: nil,
+                allCandidateDistances: allEntries,
+                thumbnailJPEGData: thumbnailJPEGData,
+                modeAScreeningState: .emptyContainer,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater
+            )
+
+        case .staleOrPositionalDrift(let driftReason):
+            return buildUnmatchedItem(
+                features: features,
+                scanSequenceNumber: scanSequenceNumber,
+                batchRunID: batchRunID,
+                batchScanIndex: batchScanIndex,
+                batchTotalCount: batchTotalCount,
+                geometryCondition: geometryCondition,
+                controlSeriesTag: controlSeriesTag,
+                aeAfWbLockState: resolvedOpticsState,
+                targetLockState: resolvedTargetState,
+                targetLockScore: targetLockScore,
+                gateDecision: "STALE_BASELINE_RECALIBRATE",
+                rejectionReason: driftReason,
+                topEntry: allEntries.first,
+                secondEntry: allEntries.dropFirst().first,
+                allEntries: allEntries,
+                thumbnailJPEGData: thumbnailJPEGData,
+                modeAScreeningState: .rejectedBaselineMismatch,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater,
+                fusionAttribution: clearGuidance
+            )
+
+        case .noEmptyBaseline:
+            break
         }
 
         // 4. Layer 2 Acoustic Specular Flat-Surface / 2D Spoof Guard
@@ -836,11 +902,11 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 gateDecision: "REJECTED_BASELINE_MISMATCH",
                 rejectionReason: mismatchCode,
                 status: .unmatchedSignature,
-                title: "Unmatched Liquid",
-                formulaDisplay: "Baseline Mismatch",
-                statusBadgeText: "MODE_A Screening • Baseline Mismatch",
+                title: "Inconclusive / No Fluid Detected",
+                formulaDisplay: "Recalibrate Empty Cup",
+                statusBadgeText: "Baseline Drift • Recalibrate Setup",
                 confidencePercent: nil,
-                scientificNote: "Container geometry does not match the saved calibration baseline (\(mismatchCode)).",
+                scientificNote: "Container geometry does not match the saved calibration baseline (\(mismatchCode)). Re-run Step 1 (Empty Cup) in your current setup.",
                 constituents: [],
                 tuneProfile: item.tuneProfile,
                 measuredPeakHz: item.measuredPeakHz,
@@ -989,66 +1055,153 @@ public struct OnDeviceAcousticClassifier: Sendable {
             )
             : nil
 
-        if let de = deltaEmpty, de.compatible {
-            let validShifts = de.relativeFrequencyShifts.compactMap { $0 }.map { abs($0) }
-            if let maxShift = validShifts.max(), maxShift >= 0.012 {
-                let resolvedScreening: ModeAScreeningState = bubbleDetected ? .bubbleScatterDetected : .liquidLoaded
-                let badge = bubbleDetected
-                    ? "MODE_A Screening • Bubble Scatter Detected"
-                    : "MODE_A Screening • Liquid Loaded"
-                let titleText = bubbleDetected ? "Bubble-Active Liquid" : "Liquid Loaded (Unmatched Class)"
-                let waterShiftNote: String = {
-                    guard let dw = deltaWater, dw.compatible else { return "" }
-                    let ws = dw.relativeFrequencyShifts.compactMap { $0 }.map { String(format: "%+.1f%%", $0 * 100.0) }
-                    return ws.isEmpty ? "" : "; Δf/f_water = [\(ws.joined(separator: ", "))]"
-                }()
-                let noteText = String(
-                    format: "Calibrated container shift detected (max |Δf/f_empty| = %.2f%%%@%@). No uncalibrated molecular or viscosity claim is asserted.",
-                    maxShift * 100.0,
-                    waterShiftNote,
-                    bubbleDetected ? "; micro-bubble scatter detected" : ""
-                )
-                return ConsumerScanItem(
-                    id: item.id,
-                    scannedAt: item.scannedAt,
-                    scanSequenceNumber: item.scanSequenceNumber,
-                    batchRunID: item.batchRunID,
-                    batchScanIndex: item.batchScanIndex,
-                    batchTotalCount: item.batchTotalCount,
-                    geometryCondition: item.geometryCondition,
-                    controlSeriesTag: item.controlSeriesTag,
-                    aeAfWbLockState: item.aeAfWbLockState,
-                    targetLockState: item.targetLockState,
-                    targetLockScore: item.targetLockScore,
-                    gateDecision: resolvedScreening.rawValue,
-                    rejectionReason: "UNCALIBRATED_CLASS_HELD",
-                    status: .unmatchedSignature,
-                    title: titleText,
-                    formulaDisplay: resolvedScreening.rawValue,
-                    statusBadgeText: badge,
-                    confidencePercent: nil,
-                    scientificNote: noteText,
-                    constituents: [],
-                    tuneProfile: item.tuneProfile,
-                    measuredPeakHz: item.measuredPeakHz,
-                    measuredCentroidHz: item.measuredCentroidHz,
-                    measuredDecayDBPerSec: item.measuredDecayDBPerSec,
-                    measuredFeatures: features,
-                    topCandidateName: allEntries.first?.displayName,
-                    topCandidateDistance: allEntries.first?.distance,
-                    runnerUpTitle: allEntries.dropFirst().first?.displayName,
-                    secondCandidateDistance: allEntries.dropFirst().first?.distance,
-                    winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
-                    allCandidateDistances: allEntries,
-                    thumbnailJPEGData: item.thumbnailJPEGData,
-                    isConditioningCycle: item.isConditioningCycle,
-                    conditioningTag: item.conditioningTag,
-                    modeAScreeningState: resolvedScreening,
-                    deltaEmptyBaseline: deltaEmpty,
-                    deltaWaterBaseline: deltaWater,
-                    fusionAttribution: clearGuidance
-                )
-            }
+        switch Self.evaluateEmptyBaselineLoadState(features: features, deltaEmpty: deltaEmpty) {
+        case .explicitLiquidLoad(let maxShift, _):
+            let resolvedScreening: ModeAScreeningState = bubbleDetected ? .bubbleScatterDetected : .liquidLoaded
+            let badge = bubbleDetected
+                ? "MODE_A Screening • Bubble Scatter Detected"
+                : "MODE_A Screening • Liquid Loaded"
+            let titleText = bubbleDetected ? "Bubble-Active Liquid" : "Liquid Loaded (Unmatched Class)"
+            let waterShiftNote: String = {
+                guard let dw = deltaWater, dw.compatible else { return "" }
+                let ws = dw.relativeFrequencyShifts.compactMap { $0 }.map { String(format: "%+.1f%%", $0 * 100.0) }
+                return ws.isEmpty ? "" : "; Δf/f_water = [\(ws.joined(separator: ", "))]"
+            }()
+            let noteText = String(
+                format: "Calibrated container load shift detected (max |Δf/f_empty| = %.2f%%%@%@). No uncalibrated molecular or viscosity claim is asserted.",
+                maxShift * 100.0,
+                waterShiftNote,
+                bubbleDetected ? "; micro-bubble scatter detected" : ""
+            )
+            return ConsumerScanItem(
+                id: item.id,
+                scannedAt: item.scannedAt,
+                scanSequenceNumber: item.scanSequenceNumber,
+                batchRunID: item.batchRunID,
+                batchScanIndex: item.batchScanIndex,
+                batchTotalCount: item.batchTotalCount,
+                geometryCondition: item.geometryCondition,
+                controlSeriesTag: item.controlSeriesTag,
+                aeAfWbLockState: item.aeAfWbLockState,
+                targetLockState: item.targetLockState,
+                targetLockScore: item.targetLockScore,
+                gateDecision: resolvedScreening.rawValue,
+                rejectionReason: "UNCALIBRATED_CLASS_HELD",
+                status: .unmatchedSignature,
+                title: titleText,
+                formulaDisplay: resolvedScreening.rawValue,
+                statusBadgeText: badge,
+                confidencePercent: nil,
+                scientificNote: noteText,
+                constituents: [],
+                tuneProfile: item.tuneProfile,
+                measuredPeakHz: item.measuredPeakHz,
+                measuredCentroidHz: item.measuredCentroidHz,
+                measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+                measuredFeatures: features,
+                topCandidateName: allEntries.first?.displayName,
+                topCandidateDistance: allEntries.first?.distance,
+                runnerUpTitle: allEntries.dropFirst().first?.displayName,
+                secondCandidateDistance: allEntries.dropFirst().first?.distance,
+                winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
+                allCandidateDistances: allEntries,
+                thumbnailJPEGData: item.thumbnailJPEGData,
+                isConditioningCycle: item.isConditioningCycle,
+                conditioningTag: item.conditioningTag,
+                modeAScreeningState: resolvedScreening,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater,
+                fusionAttribution: clearGuidance
+            )
+
+        case .withinDryContainerShell(let meanShift):
+            return ConsumerScanItem(
+                id: item.id,
+                scannedAt: item.scannedAt,
+                scanSequenceNumber: item.scanSequenceNumber,
+                batchRunID: item.batchRunID,
+                batchScanIndex: item.batchScanIndex,
+                batchTotalCount: item.batchTotalCount,
+                geometryCondition: item.geometryCondition,
+                controlSeriesTag: item.controlSeriesTag,
+                aeAfWbLockState: item.aeAfWbLockState,
+                targetLockState: item.targetLockState,
+                targetLockScore: item.targetLockScore,
+                gateDecision: "EMPTY_CONTAINER_DRY_SHELL",
+                rejectionReason: nil,
+                status: .emptyContainer,
+                title: "Empty Container / Low Coupling",
+                formulaDisplay: "No Fluid Detected",
+                statusBadgeText: "Dry Container Shell • No Liquid Load",
+                confidencePercent: max(72, min(95, Int(round((1.0 - min(0.25, meanShift * 4.0)) * 95.0)))),
+                scientificNote: String(
+                    format: "Resonance stays within your dry Empty Container baseline (mean |Δf/f| = %.2f%%). No fluid loading detected.",
+                    meanShift * 100.0
+                ),
+                constituents: [],
+                tuneProfile: item.tuneProfile,
+                measuredPeakHz: item.measuredPeakHz,
+                measuredCentroidHz: item.measuredCentroidHz,
+                measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+                measuredFeatures: features,
+                topCandidateName: "Empty Container",
+                topCandidateDistance: meanShift,
+                runnerUpTitle: allEntries.first?.displayName,
+                secondCandidateDistance: allEntries.first?.distance,
+                winningMargin: nil,
+                allCandidateDistances: allEntries,
+                thumbnailJPEGData: item.thumbnailJPEGData,
+                isConditioningCycle: item.isConditioningCycle,
+                conditioningTag: item.conditioningTag,
+                modeAScreeningState: .emptyContainer,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater
+            )
+
+        case .staleOrPositionalDrift(let driftReason):
+            return ConsumerScanItem(
+                id: item.id,
+                scannedAt: item.scannedAt,
+                scanSequenceNumber: item.scanSequenceNumber,
+                batchRunID: item.batchRunID,
+                batchScanIndex: item.batchScanIndex,
+                batchTotalCount: item.batchTotalCount,
+                geometryCondition: item.geometryCondition,
+                controlSeriesTag: item.controlSeriesTag,
+                aeAfWbLockState: item.aeAfWbLockState,
+                targetLockState: item.targetLockState,
+                targetLockScore: item.targetLockScore,
+                gateDecision: "STALE_BASELINE_RECALIBRATE",
+                rejectionReason: driftReason,
+                status: .unmatchedSignature,
+                title: "Inconclusive / No Fluid Detected",
+                formulaDisplay: "Recalibrate Empty Cup",
+                statusBadgeText: "Baseline Drift • Recalibrate Setup",
+                confidencePercent: nil,
+                scientificNote: "Container resonance shifted outside your saved Empty Cup tolerance (\(driftReason)). Reset or re-run Step 1 (Empty Cup) in your current position.",
+                constituents: [],
+                tuneProfile: item.tuneProfile,
+                measuredPeakHz: item.measuredPeakHz,
+                measuredCentroidHz: item.measuredCentroidHz,
+                measuredDecayDBPerSec: item.measuredDecayDBPerSec,
+                measuredFeatures: features,
+                topCandidateName: allEntries.first?.displayName,
+                topCandidateDistance: allEntries.first?.distance,
+                runnerUpTitle: allEntries.dropFirst().first?.displayName,
+                secondCandidateDistance: allEntries.dropFirst().first?.distance,
+                winningMargin: (allEntries.count > 1) ? (allEntries[1].distance - allEntries[0].distance) : nil,
+                allCandidateDistances: allEntries,
+                thumbnailJPEGData: item.thumbnailJPEGData,
+                isConditioningCycle: item.isConditioningCycle,
+                conditioningTag: item.conditioningTag,
+                modeAScreeningState: .rejectedBaselineMismatch,
+                deltaEmptyBaseline: deltaEmpty,
+                deltaWaterBaseline: deltaWater,
+                fusionAttribution: clearGuidance
+            )
+
+        case .noEmptyBaseline:
+            break
         }
 
         let screenState: ModeAScreeningState = bubbleDetected ? .bubbleScatterDetected : .noValidatedMatch
@@ -1069,9 +1222,9 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 ? "BUBBLE_SCATTER_DETECTED: physical micro-bubble/effervescence scatter observed"
                 : "MODE_A_SCREENING_BOUNDARY: uncalibrated airborne reflection requires container baseline (Delta X_empty / Delta X_water)",
             status: .unmatchedSignature,
-            title: "Unmatched Liquid",
-            formulaDisplay: screenState.rawValue,
-            statusBadgeText: bubbleDetected ? "MODE_A Screening • Bubble Scatter Detected" : "Ambiguity Gate R2 • No Forced Match",
+            title: bubbleDetected ? "Bubble-Active Liquid" : "Inconclusive / No Fluid Detected",
+            formulaDisplay: bubbleDetected ? screenState.rawValue : "No Validated Fluid Match",
+            statusBadgeText: bubbleDetected ? "MODE_A Screening • Bubble Scatter Detected" : "Inconclusive • Calibration Needed",
             confidencePercent: nil,
             scientificNote: item.scientificNote,
             constituents: [],
@@ -1181,15 +1334,13 @@ public struct OnDeviceAcousticClassifier: Sendable {
         }
 
         if bestTarget.targetID == CalibratedAcousticPrototype.emptyContainerTargetID {
-            // Never classify a container as Empty if its 4-mode vector exhibits a >= 2.2% mean mass-loading shift
-            if let de = deltaEmpty, de.compatible {
-                let validShifts = de.relativeFrequencyShifts.compactMap { $0 }.map { abs($0) }
-                if !validShifts.isEmpty {
-                    let meanShift = validShifts.reduce(0.0, +) / Double(validShifts.count)
-                    if meanShift >= 0.022 || (validShifts.max() ?? 0.0) >= 0.080 {
-                        return nil
-                    }
-                }
+            // Only leave Empty Container when a consistent liquid load shift or positional baseline drift is verified
+            // (a single stray room-echo outlier peak must never flip a dry glass to Liquid Loaded).
+            switch Self.evaluateEmptyBaselineLoadState(features: features, deltaEmpty: deltaEmpty) {
+            case .explicitLiquidLoad, .staleOrPositionalDrift:
+                return nil
+            case .withinDryContainerShell, .noEmptyBaseline:
+                break
             }
             return ConsumerScanItem(
                 scanSequenceNumber: scanSequenceNumber,
@@ -1204,8 +1355,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 gateDecision: "CALIBRATED_EMPTY_CONTAINER",
                 rejectionReason: nil,
                 status: .emptyContainer,
-                title: "Empty Container",
-                formulaDisplay: "No Liquid Fill Detected",
+                title: "Empty Container / Low Coupling",
+                formulaDisplay: "No Fluid Detected",
                 statusBadgeText: "Calibrated Empty Glass • \(confidence)% Similarity",
                 confidencePercent: confidence,
                 scientificNote: "Matches calibrated empty-container control (d = \(String(format: "%.2f", bestTarget.distance)), margin = +\(String(format: "%.2f", margin))).",
@@ -2000,17 +2151,30 @@ public struct OnDeviceAcousticClassifier: Sendable {
     ) -> ConsumerScanItem {
         let margin = (topEntry != nil && secondEntry != nil) ? (secondEntry!.distance - topEntry!.distance) : nil
         let gateSummary: String
-        if modeAScreeningState == .bubbleScatterDetected {
-            gateSummary = "MODE_A Screening detected elevated high-frequency micro-bubble / effervescence scatter. Held as Unmatched Liquid because uncalibrated airborne scatter is non-specific without a container baseline."
-        } else if let top = topEntry, let m = margin {
-            gateSummary = "MODE_A Ambiguity Gate held back forced classification (top raw candidate \(top.displayName) d=\(String(format: "%.2f", top.distance)), margin=+\(String(format: "%.2f", m))). Calibrate Empty & Water container baselines for differential shift screening."
-        } else {
-            gateSummary = "Measured acoustic echo without forcing an unverified chemical match."
-        }
+        let titleText: String
+        let formulaText: String
+        let badge: String
 
-        let badge = (modeAScreeningState == .bubbleScatterDetected)
-            ? "MODE_A Screening • Bubble Scatter Detected"
-            : "Ambiguity Gate R2 • No Forced Match"
+        if modeAScreeningState == .bubbleScatterDetected {
+            titleText = "Bubble-Active Liquid"
+            formulaText = "Effervescent Acoustic Profile"
+            badge = "MODE_A Screening • Bubble Scatter Detected"
+            gateSummary = "MODE_A Screening detected elevated high-frequency micro-bubble / effervescence scatter without a calibrated container baseline."
+        } else if modeAScreeningState == .rejectedBaselineMismatch {
+            titleText = "Inconclusive / No Fluid Detected"
+            formulaText = "Recalibrate Empty Cup"
+            badge = "Baseline Drift • Recalibrate Setup"
+            gateSummary = "Container resonance shifted outside your saved Empty Cup tolerance (\(rejectionReason ?? "BASELINE_DRIFT")). Re-run Step 1 (Empty Cup) in your current position."
+        } else {
+            titleText = "Inconclusive / No Fluid Detected"
+            formulaText = "No Validated Fluid Match"
+            badge = "Inconclusive • Calibration Needed"
+            if let top = topEntry, let m = margin {
+                gateSummary = "Airborne acoustics cannot verify a clear fluid or separate an empty vessel cold (nearest uncalibrated echo \(top.displayName) d=\(String(format: "%.2f", top.distance)), margin=+\(String(format: "%.2f", m))). Scan a colored/turbid/fizzy beverage or lock the 3-Step Cup Comparator."
+            } else {
+                gateSummary = "No validated liquid signature detected. Aim at a colored/turbid/carbonated beverage or calibrate Empty & Water baselines in the same stationary cup."
+            }
+        }
 
         return ConsumerScanItem(
             scanSequenceNumber: scanSequenceNumber,
@@ -2025,18 +2189,12 @@ public struct OnDeviceAcousticClassifier: Sendable {
             gateDecision: gateDecision,
             rejectionReason: rejectionReason,
             status: .unmatchedSignature,
-            title: "Unmatched Liquid",
-            formulaDisplay: "Acoustic Profile",
+            title: titleText,
+            formulaDisplay: formulaText,
             statusBadgeText: badge,
             confidencePercent: nil,
             scientificNote: gateSummary,
-            constituents: [
-                ReferenceConstituent(
-                    symbol: String(format: "%.1f Hz", features.dominantPeakHz),
-                    name: "Primary Resonance Peak",
-                    roleDescription: "Raw measured resonance (unclassified)"
-                )
-            ],
+            constituents: [],
             tuneProfile: Self.buildAcousticSignatureTune(features: features, formula: "Acoustic Signature"),
             measuredPeakHz: features.dominantPeakHz,
             measuredCentroidHz: features.spectralCentroidHz,
@@ -2139,6 +2297,92 @@ public struct OnDeviceAcousticClassifier: Sendable {
             return deltaSHF >= 2.5
         }
         return features.highFreqBubbleScatterDB >= -3.0
+    }
+
+    /// Physical classification of a scan's acoustic shift relative to a calibrated `EMPTY_CONTAINER` baseline.
+    /// Requires an explicit liquid mass-loading delta before asserting `Liquid Loaded`, preserves dry shell echoes as
+    /// `Empty Container / Low Coupling`, and detects stale/moved container baselines so they trigger recalibration.
+    public enum EmptyBaselineLoadEvaluation: Equatable, Sendable {
+        case noEmptyBaseline
+        case withinDryContainerShell(meanAbsShift: Double)
+        case explicitLiquidLoad(maxAbsShift: Double, meanAbsShift: Double)
+        case staleOrPositionalDrift(reason: String)
+    }
+
+    public static func evaluateEmptyBaselineLoadState(
+        features: ExtractedConsumerFeatures,
+        deltaEmpty: DifferentialBaselineVector?
+    ) -> EmptyBaselineLoadEvaluation {
+        guard let de = deltaEmpty, de.compatible else {
+            return .noEmptyBaseline
+        }
+
+        let signedShifts = de.relativeFrequencyShifts.compactMap { $0 }.filter(\.isFinite)
+        let sampleValidModes = features.modalVector?.validityMask.reduce(0, +) ?? 0
+        if signedShifts.isEmpty {
+            if sampleValidModes > 0 {
+                return .staleOrPositionalDrift(reason: "NO_OVERLAPPING_CONTAINER_MODES")
+            }
+            return .noEmptyBaseline
+        }
+
+        let absShifts = signedShifts.map { abs($0) }.sorted()
+        let count = absShifts.count
+        let meanAbs = absShifts.reduce(0.0, +) / Double(count)
+        let medianAbs = (count % 2 != 0) ? absShifts[count / 2] : 0.5 * (absShifts[count / 2 - 1] + absShifts[count / 2])
+        let maxAbs = absShifts.last ?? 0.0
+
+        let sortedSigned = signedShifts.sorted()
+        let medianSigned = (count % 2 != 0) ? sortedSigned[count / 2] : 0.5 * (sortedSigned[count / 2 - 1] + sortedSigned[count / 2])
+        let negativeLoadShifts = signedShifts.filter { $0 <= -0.020 }.map { abs($0) }
+        let loadedModeCount = absShifts.filter { $0 >= 0.020 }.count
+
+        // 1. Stale or positional baseline drift:
+        //    - Extreme median shift (> 45%) exceeds plausible liquid mass-loading on the same glass, OR
+        //    - Net sharp UPWARD resonance jump (> +6% median) contradicts physical liquid mass-loading (which lowers f_shell)
+        //      and indicates a moved position or different container.
+        if medianAbs > 0.45 {
+            return .staleOrPositionalDrift(
+                reason: String(format: "PRIMARY_RESONANCE_DRIFT_%.1fPCT", medianAbs * 100.0)
+            )
+        }
+        if medianSigned > 0.06 {
+            return .staleOrPositionalDrift(
+                reason: String(format: "UPWARD_RESONANCE_SHIFT_POS_%.1fPCT", medianSigned * 100.0)
+            )
+        }
+
+        // 2. Explicit liquid mass-loading delta:
+        //    - Multi-mode: require consistent non-upward shift across modes (median >= 2.2% with >= 2 shifted modes,
+        //      OR downward mass-loading shift + mean >= 2.5%), so a single stray room-echo peak cannot flip an empty glass.
+        //    - Single-mode: require genuine downward mass-loading shift (<= -2.5%).
+        let hasExplicitLoad: Bool
+        if count >= 2 {
+            hasExplicitLoad = medianSigned <= 0.015 && (
+                (medianAbs >= 0.022 && loadedModeCount >= 2)
+                    || (negativeLoadShifts.count >= 1 && meanAbs >= 0.025)
+            )
+        } else {
+            hasExplicitLoad = signedShifts[0] <= -0.025
+        }
+
+        if hasExplicitLoad {
+            return .explicitLiquidLoad(maxAbsShift: maxAbs, meanAbsShift: meanAbs)
+        }
+
+        // 3. Otherwise, resonance falls within dry container-shell tolerances (check Q/damping delta as well):
+        //    Only treat a dry-frequency trace as loaded if Q dropped sharply AND alpha increased across modes.
+        let validDeltaAlpha = de.deltaDecayAlphaPerSec.compactMap { $0 }.filter(\.isFinite)
+        let validDeltaQ = de.deltaQualityFactorQ.compactMap { $0 }.filter(\.isFinite)
+        if !validDeltaAlpha.isEmpty, !validDeltaQ.isEmpty {
+            let meanAlphaIncrease = validDeltaAlpha.reduce(0.0, +) / Double(validDeltaAlpha.count)
+            let meanQDrop = validDeltaQ.reduce(0.0, +) / Double(validDeltaQ.count)
+            if meanAlphaIncrease >= 65.0 && meanQDrop <= -6.0 && medianAbs >= 0.014 {
+                return .explicitLiquidLoad(maxAbsShift: maxAbs, meanAbsShift: meanAbs)
+            }
+        }
+
+        return .withinDryContainerShell(meanAbsShift: meanAbs)
     }
 
     /// Computes differential shift vectors (`Delta X_empty`, `Delta X_water`) against saved baseline prototypes.

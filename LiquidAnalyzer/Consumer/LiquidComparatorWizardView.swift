@@ -187,7 +187,11 @@ public struct LiquidComparatorWizardView: View {
                             .font(.system(size: 24, weight: .heavy, design: .rounded))
                             .foregroundStyle(Color(red: 0.06, green: 0.12, blue: 0.24))
 
-                        Text("Separates clear colorless liquids (Water vs. Vinegar vs. Saline vs. Seltzer) by locking your container's Empty & Water reference modes.")
+                        Text("Experimental Comparative Mode • Stationary Same-Cup Only")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(LiquidAnalyzerPalette.compositionOrange)
+
+                        Text("Compares clear liquids (Water vs. Vinegar vs. Saline) only when the phone and identical glass remain stationary across Empty → Water → Sample. Cold clear-liquid identification without calibration is reserved for future MODE_B contact transducer hardware.")
                             .font(.subheadline)
                             .foregroundStyle(Color(red: 0.30, green: 0.36, blue: 0.46))
                     }

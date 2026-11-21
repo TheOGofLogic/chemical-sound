@@ -312,7 +312,8 @@ public struct MultiModalFusionClassifier: Sendable {
         return nil
     }
 
-    /// Builds advisory attribution for clear uncalibrated liquids so the Result screen surfaces the 3-Step Guided Comparator CTA.
+    /// Builds advisory attribution for clear uncalibrated vessels so the Result screen surfaces grounded scope guidance
+    /// without falsely asserting that an empty clear glass contains liquid.
     public static func uncalibratedClearLiquidGuidance(
         features: ExtractedConsumerFeatures,
         vision: VisionFeatureVector,
@@ -325,28 +326,46 @@ public struct MultiModalFusionClassifier: Sendable {
         let missingWaterRef = (deltaWater == nil) || (deltaWater?.compatible == false)
         guard isClear && missingWaterRef else { return nil }
 
+        let loadState = OnDeviceAcousticClassifier.evaluateEmptyBaselineLoadState(
+            features: features,
+            deltaEmpty: deltaEmpty
+        )
         let emptySummary: String = {
-            if let de = deltaEmpty, de.compatible,
-               let maxS = de.relativeFrequencyShifts.compactMap({ $0 }).map({ abs($0) * 100.0 }).max() {
-                return String(format: "Liquid Loaded (max |Δf/f_empty| = %.2f%%)", maxS)
+            switch loadState {
+            case .explicitLiquidLoad(let maxS, _):
+                return String(format: "Liquid Loaded (max |Δf/f_empty| = %.2f%%)", maxS * 100.0)
+            case .withinDryContainerShell(let meanS):
+                return String(format: "Dry Container Shell (mean |Δf/f_empty| = %.2f%% • No Liquid Load)", meanS * 100.0)
+            case .staleOrPositionalDrift(let reason):
+                return "Baseline Drift (\(reason)) — Re-run Step 1 (Empty Cup)"
+            case .noEmptyBaseline:
+                return String(format: "Container Resonance %.0f Hz (Uncalibrated / Low Coupling)", features.dominantPeakHz)
             }
-            return String(format: "Container Resonance %.0f Hz (Uncalibrated Cup)", features.dominantPeakHz)
         }()
 
         let visSummary = String(
-            format: "Clear Colorless Pool (Sat %.0f%%, Turbidity %.0f%%, Meniscus %.0f°)",
+            format: "Clear Colorless Vessel — Empty or Clear Liquid (Sat %.0f%%, Turbidity %.0f%%, Meniscus %.0f°)",
             vision.meanSaturationWB * 100.0,
             vision.opticalTurbidity * 100.0,
             vision.meniscusContactAngleDegrees
         )
 
+        let comparatorNote: String = {
+            switch loadState {
+            case .explicitLiquidLoad:
+                return "Step 1 (Empty Cup) locked — add Step 2 (Water Blank) in the same stationary cup to compare Water, Vinegar & Saline."
+            case .staleOrPositionalDrift:
+                return "Container shifted relative to your saved Empty Cup baseline. Reset or re-lock Step 1 (Empty Cup) before testing."
+            case .withinDryContainerShell, .noEmptyBaseline:
+                return "Phone-only mode identifies colored, turbid, or fizzy beverages directly. For clear liquids, use the experimental 3-Step Cup Comparator (stationary Empty → Water → Sample)."
+            }
+        }()
+
         return MultiModalAttribution(
-            inferenceMode: "CLEAR_AQUEOUS_NEEDS_WATER_BLANK",
+            inferenceMode: "CLEAR_VESSEL_SCOPE_BOUNDARY",
             acousticEvidenceSummary: emptySummary,
             visionEvidenceSummary: visSummary,
-            comparatorEvidenceSummary: deltaEmpty != nil
-                ? "Step 1 (Empty Cup) locked — lock Step 2 (Water Blank) to separate Water, Vinegar & Saline."
-                : "Use the 3-Step Cup Comparator (Empty -> Water -> Sample) to separate clear Water, Vinegar & Saline.",
+            comparatorEvidenceSummary: comparatorNote,
             mahalanobisDistance: nil,
             secondBestDistance: nil,
             winningMargin: nil,

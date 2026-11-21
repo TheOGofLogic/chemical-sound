@@ -520,6 +520,31 @@ public struct CalibratedAcousticPrototype: Codable, Equatable, Identifiable, Sen
     }
 }
 
+/// Typed calibration failure surfaced to the UI whenever baseline aggregation or persistence fails,
+/// preventing ghost Step 1 (Empty Cup) or Step 2 (Water Blank) calibration saves.
+public enum CalibrationError: LocalizedError, Equatable, Sendable {
+    case baselineCaptureFailed(targetID: String, reason: String)
+    case persistenceFailed(targetID: String, underlyingDescription: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .baselineCaptureFailed(let targetID, let reason):
+            let label = Self.displayLabel(for: targetID)
+            return "\(label) calibration failed: \(reason) Hold steady in a quiet spot and re-scan."
+        case .persistenceFailed(let targetID, let underlyingDescription):
+            let label = Self.displayLabel(for: targetID)
+            return "Could not save \(label) baseline to storage (\(underlyingDescription)). Please try again."
+        }
+    }
+
+    private static func displayLabel(for targetID: String) -> String {
+        if targetID == CalibratedAcousticPrototype.emptyContainerTargetID { return "Empty Cup" }
+        if targetID == CalibratedAcousticPrototype.waterReferenceTargetID { return "Water Blank" }
+        if targetID == CalibratedAcousticPrototype.solidSurfaceTargetID { return "Solid Surface" }
+        return ReferenceLiquidProfile.fusionLibrary.first(where: { $0.id == targetID })?.displayName ?? targetID
+    }
+}
+
 /// Thread-safe persistent store for user-calibrated known liquid & solid-surface acoustic standards.
 public final class CalibratedPrototypeStore: @unchecked Sendable {
     public let fileURL: URL
@@ -560,6 +585,12 @@ public final class CalibratedPrototypeStore: @unchecked Sendable {
 
     /// Replaces any prior baseline sharing the same `(targetID, geometryCondition)` with the newly calibrated steady-state baseline.
     public func upsertBaseline(_ prototype: CalibratedAcousticPrototype) {
+        try? upsertBaselineVerified(prototype)
+    }
+
+    /// Replaces any prior baseline sharing `(targetID, geometryCondition)`, writes atomically to disk,
+    /// and verifies the persisted record reloads cleanly (throws `CalibrationError.persistenceFailed` on failure).
+    public func upsertBaselineVerified(_ prototype: CalibratedAcousticPrototype) throws {
         var current = loadAll()
         current.removeAll { existing in
             existing.targetID == prototype.targetID &&
@@ -569,23 +600,54 @@ public final class CalibratedPrototypeStore: @unchecked Sendable {
         if current.count > 120 {
             current = Array(current.prefix(120))
         }
-        saveAll(current)
+        do {
+            try saveAllVerified(current)
+        } catch {
+            throw CalibrationError.persistenceFailed(
+                targetID: prototype.targetID,
+                underlyingDescription: error.localizedDescription
+            )
+        }
+        let reloaded = loadAll()
+        guard reloaded.contains(where: { $0.id == prototype.id }) else {
+            throw CalibrationError.persistenceFailed(
+                targetID: prototype.targetID,
+                underlyingDescription: "Persisted baseline verification readback failed"
+            )
+        }
+    }
+
+    /// Removes stored baselines matching `(targetID, geometryCondition)` (e.g., invalidating a stale Water Blank
+    /// whenever a new Empty Cup baseline is locked for that geometry).
+    public func removeBaselines(targetID: String, geometryCondition: String?) {
+        var current = loadAll()
+        let before = current.count
+        current.removeAll { existing in
+            existing.targetID == targetID &&
+                (existing.geometryCondition ?? "") == (geometryCondition ?? "")
+        }
+        if current.count != before {
+            saveAll(current)
+        }
     }
 
     public func clearAll() {
         saveAll([])
     }
 
-    public func saveAll(_ items: [CalibratedAcousticPrototype]) {
+    public func saveAllVerified(_ items: [CalibratedAcousticPrototype]) throws {
         lock.lock()
         defer { lock.unlock() }
         let dir = fileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(items) {
-            try? data.write(to: fileURL, options: .atomic)
-        }
+        let data = try encoder.encode(items)
+        try data.write(to: fileURL, options: .atomic)
+    }
+
+    public func saveAll(_ items: [CalibratedAcousticPrototype]) {
+        try? saveAllVerified(items)
     }
 }
 
@@ -642,6 +704,7 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
     public let expectedMidToHighDB: Double
     public let expectedDecayDBPerSec: Double
     public let expectedHighScatterDB: Double
+    public let typicalPHRange: String
     public let tuneProfile: ChemicalTuneProfile
 
     public init(
@@ -655,6 +718,7 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
         expectedMidToHighDB: Double,
         expectedDecayDBPerSec: Double,
         expectedHighScatterDB: Double = -8.0,
+        typicalPHRange: String? = nil,
         tuneProfile: ChemicalTuneProfile
     ) {
         self.id = id
@@ -667,6 +731,7 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
         self.expectedMidToHighDB = expectedMidToHighDB
         self.expectedDecayDBPerSec = expectedDecayDBPerSec
         self.expectedHighScatterDB = expectedHighScatterDB
+        self.typicalPHRange = typicalPHRange ?? Self.typicalPHRange(forProfileID: id)
         self.tuneProfile = tuneProfile
     }
 
@@ -1135,6 +1200,39 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
 
     public static var fusionLibrary: [ReferenceLiquidProfile] {
         provisionalLibrary + fusionSupplementaryProfiles
+    }
+
+    /// Resolves typical reference pH range and molecular metadata for any positively matched `ConsumerScanItem`.
+    public static func matchingProfile(for item: ConsumerScanItem) -> ReferenceLiquidProfile? {
+        guard item.status == .referenceMatch else { return nil }
+        if let exactTitle = fusionLibrary.first(where: { $0.displayName.caseInsensitiveCompare(item.title) == .orderedSame }) {
+            return exactTitle
+        }
+        if let exactFormula = fusionLibrary.first(where: { $0.formulaDisplay == item.formulaDisplay }) {
+            return exactFormula
+        }
+        return nil
+    }
+
+    public static func typicalPHRange(forProfileID id: String) -> String {
+        switch id {
+        case "H2O_DIST": return "pH 6.5 – 7.5 (Neutral Aqueous)"
+        case "NACL_AQ": return "pH 6.5 – 7.5 (Neutral Electrolyte)"
+        case "H2O2_AQ": return "pH 4.5 – 6.2 (Mildly Acidic Peroxide)"
+        case "VIN_WHITE": return "pH 2.4 – 3.0 (Acetic Acid)"
+        case "SUC_AQ": return "pH 3.0 – 6.5 (Aqueous Carbohydrate)"
+        case "MILK_DAIRY": return "pH 6.5 – 6.7 (Mildly Acidic Colloid)"
+        case "COFFEE_DARK": return "pH 4.8 – 5.2 (Mildly Acidic Brew)"
+        case "CITRUS_JUICE": return "pH 2.8 – 4.2 (Citric Acidic)"
+        case "AQUA_SURFACTANT": return "pH 5.5 – 8.5 (Formulated Aqueous)"
+        case "ISOPROPYL_ALC": return "Neutral Alcohol-Water (~pH 7)"
+        case "OIL_VEG": return "Non-Aqueous Lipid (No pH Scale)"
+        case "SELTZER_CARBONATED": return "pH 4.5 – 5.5 (Carbonic Acid)"
+        case "COLA_CARBONATED": return "pH 2.4 – 3.2 (Phosphoric / Carbonic Acid)"
+        case "WINE_RED": return "pH 3.3 – 3.8 (Tartaric / Malic Acid)"
+        case "TEA_AMBER": return "pH 4.9 – 5.5 (Botanical Infusion)"
+        default: return "Reference Range Unavailable"
+        }
     }
 }
 
@@ -2053,11 +2151,13 @@ public enum BatchSteadyStateFeatureAggregator {
         items: [ConsumerScanItem],
         targetID: String
     ) -> AggregatedBatchBaseline? {
-        let isSolidTarget = (targetID == CalibratedAcousticPrototype.solidSurfaceTargetID)
+        // Never drop dry Empty Container calibration sweeps if optical liquid heuristics tag the empty glass as non-liquid!
+        let allowsNonLiquidOptics = (targetID == CalibratedAcousticPrototype.solidSurfaceTargetID)
+            || (targetID == CalibratedAcousticPrototype.emptyContainerTargetID)
         let ordered = items.sorted { ($0.batchScanIndex ?? 0) < ($1.batchScanIndex ?? 0) }
         let validAll = ordered.filter { item in
             guard item.measuredFeatures != nil, item.status != .unclearScan else { return false }
-            if !isSolidTarget && item.status == .nonLiquidMaterial { return false }
+            if !allowsNonLiquidOptics && item.status == .nonLiquidMaterial { return false }
             return true
         }
         guard !validAll.isEmpty else { return nil }
@@ -2087,15 +2187,18 @@ public enum BatchSteadyStateFeatureAggregator {
             items: steadyItems,
             purgeConditioningK2: false,
             persistenceFraction: 0.50,
-            allowNonLiquidSolid: isSolidTarget
+            allowNonLiquidSolid: allowsNonLiquidOptics
         )
+
+        let aggPeakHz = med(feats.map(\.dominantPeakHz), fallback: first.dominantPeakHz)
+        guard aggPeakHz.isFinite && aggPeakHz > 0.0 else { return nil }
 
         let aggFeatures = ExtractedConsumerFeatures(
             activeSNRDB: med(feats.map(\.activeSNRDB), fallback: first.activeSNRDB),
             activeRMSDBFS: med(feats.map(\.activeRMSDBFS), fallback: first.activeRMSDBFS),
             peakDBFS: med(feats.map(\.peakDBFS), fallback: first.peakDBFS),
             clippedSamples: 0,
-            dominantPeakHz: med(feats.map(\.dominantPeakHz), fallback: first.dominantPeakHz),
+            dominantPeakHz: aggPeakHz,
             primaryPeakAmplitudeDB: med(feats.map(\.primaryPeakAmplitudeDB), fallback: first.primaryPeakAmplitudeDB),
             secondaryPeaksHz: steadyMV.frequenciesHz.dropFirst().compactMap { $0 },
             secondaryPeakAmplitudesDB: first.secondaryPeakAmplitudesDB,

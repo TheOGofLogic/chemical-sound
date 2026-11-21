@@ -407,11 +407,34 @@ public final class ConsumerScanCoordinator: ObservableObject {
         case .unclearScan:
             return "Scan unclear. Please hold steady and try again."
         case .unmatchedSignature:
-            if item.fusionAttribution?.recommendsGuidedComparator == true {
-                return "Clear liquid detected. Lock empty cup and plain water in the 3-step cup comparator to identify water, salt water, or vinegar."
+            switch item.modeAScreeningState {
+            case .liquidLoaded:
+                return "Liquid detected, unmatched class."
+            case .bubbleScatterDetected:
+                return "Carbonated liquid detected."
+            case .rejectedBaselineMismatch:
+                return "Container shifted. Please recalibrate empty cup."
+            case .emptyContainer:
+                return "Empty cup"
+            case .nonstandardSurfaceResponse:
+                return "Non-liquid surface"
+            case .calibratedClassCandidate, .noValidatedMatch, .none:
+                return "Inconclusive. No fluid identified."
             }
-            return "Liquid detected"
         }
+    }
+
+    public func speakCalibrationFailureAnnouncement() {
+        #if os(iOS)
+        guard voiceAnnouncementsEnabled else { return }
+        stopVoiceAnnouncement()
+        let utterance = AVSpeechUtterance(string: "Calibration failed. Please hold steady and try again.")
+        utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
+            ?? AVSpeechSynthesisVoice(language: "en-US")
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.96
+        utterance.volume = 1.0
+        speechSynthesizer.speak(utterance)
+        #endif
     }
 
     public func speakResultAnnouncement(
@@ -669,17 +692,31 @@ public final class ConsumerScanCoordinator: ObservableObject {
         reconcileHistoryWithCalibratedBaselines(forGeometry: nil)
     }
 
-    /// Phase R2-C (`LA-R2-C-PLAN-001` Sec. 2.1): Saves the steady-state median (`Sweeps 3..20`, `K_cond = 2` purged)
-    /// of a multi-scan cohort as an empirical container or reference baseline (`EMPTY_CONTAINER`, `H2O_DIST`, `SOLID_SURFACE`, etc.)
-    /// and reconciles matching-geometry scans in `history` so `Delta X_empty` / `Delta X_water` shift vectors populate immediately.
+    /// Phase R2-C / Build 19: Verified steady-state median (`Sweeps 3..20`, `K_cond = 2` purged) baseline save.
+    /// Throws `CalibrationError.baselineCaptureFailed` or `CalibrationError.persistenceFailed` instead of silently
+    /// succeeding when frames are dropped or disk write fails — preventing ghost Step 1 / Step 2 calibration states.
     @discardableResult
-    public func teachCalibratedBatchBaseline(
+    public func teachCalibratedBatchBaselineVerified(
         items: [ConsumerScanItem],
         targetID: String
-    ) -> CalibratedAcousticPrototype? {
-        guard let agg = BatchSteadyStateFeatureAggregator.aggregate(items: items, targetID: targetID) else {
-            return nil
+    ) throws -> CalibratedAcousticPrototype {
+        guard !items.isEmpty else {
+            throw CalibrationError.baselineCaptureFailed(
+                targetID: targetID,
+                reason: "No calibration sweeps were recorded."
+            )
         }
+        guard let agg = BatchSteadyStateFeatureAggregator.aggregate(items: items, targetID: targetID) else {
+            let unclearCount = items.filter { $0.status == .unclearScan }.count
+            let reason: String
+            if unclearCount == items.count {
+                reason = "All \(items.count) sweeps failed signal quality (too quiet, clipped, or noisy)."
+            } else {
+                reason = "Usable acoustic resonance frames were dropped during capture."
+            }
+            throw CalibrationError.baselineCaptureFailed(targetID: targetID, reason: reason)
+        }
+
         let proto = CalibratedAcousticPrototype(
             targetID: targetID,
             features: agg.features,
@@ -687,12 +724,43 @@ public final class ConsumerScanCoordinator: ObservableObject {
             sourceBatchRunID: agg.batchRunID,
             steadyStateSweepCount: agg.steadyStateSweepCount
         )
-        prototypeStore.upsertBaseline(proto)
-        calibratedPrototypes = prototypeStore.loadAll()
+
+        // When locking a fresh Empty Cup baseline, invalidate any prior Water Blank for this geometry
+        // so Step 2 is never compared against an older cup or moved position.
+        if targetID == CalibratedAcousticPrototype.emptyContainerTargetID {
+            prototypeStore.removeBaselines(
+                targetID: CalibratedAcousticPrototype.waterReferenceTargetID,
+                geometryCondition: agg.geometryCondition
+            )
+        }
+
+        try prototypeStore.upsertBaselineVerified(proto)
+        let verifiedList = prototypeStore.loadAll()
+        guard verifiedList.contains(where: { $0.id == proto.id }) else {
+            throw CalibrationError.baselineCaptureFailed(
+                targetID: targetID,
+                reason: "Baseline did not persist to local calibration storage."
+            )
+        }
+        calibratedPrototypes = verifiedList
         triggerLightHaptic()
 
         reconcileHistoryWithCalibratedBaselines(forGeometry: agg.geometryCondition)
         return proto
+    }
+
+    /// Convenience non-throwing wrapper that surfaces `CalibrationError` directly into `consumerAlertMessage`.
+    @discardableResult
+    public func teachCalibratedBatchBaseline(
+        items: [ConsumerScanItem],
+        targetID: String
+    ) -> CalibratedAcousticPrototype? {
+        do {
+            return try teachCalibratedBatchBaselineVerified(items: items, targetID: targetID)
+        } catch {
+            consumerAlertMessage = error.localizedDescription
+            return nil
+        }
     }
 
     /// Re-evaluates existing matching-geometry scans in `history` against `calibratedPrototypes` while preserving raw features.
@@ -1022,12 +1090,18 @@ public final class ConsumerScanCoordinator: ObservableObject {
             }
 
             warmAudioEngine.stopWarmBatchEngine()
-            // Auto-save baseline when invoked from Guided 3-Step Cup Comparator (Step 1 Empty or Step 2 Water Blank)
+            // Auto-save baseline when invoked from Guided 3-Step Cup Comparator (Step 1 Empty or Step 2 Water Blank).
+            // Fails loudly on CalibrationError and blocks advancing to the next step so ghost baselines never occur.
+            var calibrationFailureError: Error?
             if let autoSaveTarget = autoSaveBaselineTargetID {
                 let batchMembers = history.filter { $0.batchRunID == batchRunID }
-                _ = teachCalibratedBatchBaseline(items: batchMembers, targetID: autoSaveTarget)
-                if let refreshedLast = history.first(where: { $0.batchRunID == batchRunID }) {
-                    lastResultItem = refreshedLast
+                do {
+                    _ = try teachCalibratedBatchBaselineVerified(items: batchMembers, targetID: autoSaveTarget)
+                    if let refreshedLast = history.first(where: { $0.batchRunID == batchRunID }) {
+                        lastResultItem = refreshedLast
+                    }
+                } catch {
+                    calibrationFailureError = error
                 }
             }
 
@@ -1041,7 +1115,18 @@ public final class ConsumerScanCoordinator: ObservableObject {
             if Task.isCancelled { return }
             scanProgress = 1.0
 
-            if let nextStep = comparatorFollowUpStep {
+            if let calErr = calibrationFailureError {
+                selectedTab = .scan
+                flowStep = .home
+                if autoSaveBaselineTargetID == CalibratedAcousticPrototype.emptyContainerTargetID {
+                    comparatorActiveStep = .emptyCup
+                } else if autoSaveBaselineTargetID == CalibratedAcousticPrototype.waterReferenceTargetID {
+                    comparatorActiveStep = .waterBlank
+                }
+                isComparatorWizardPresented = true
+                consumerAlertMessage = calErr.localizedDescription
+                speakCalibrationFailureAnnouncement()
+            } else if let nextStep = comparatorFollowUpStep {
                 comparatorActiveStep = nextStep
                 selectedTab = .scan
                 flowStep = .home

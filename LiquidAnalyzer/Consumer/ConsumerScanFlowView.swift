@@ -5,6 +5,7 @@ public struct ConsumerScanFlowView: View {
     @ObservedObject var coordinator: ConsumerScanCoordinator
     @ObservedObject private var cameraService: CameraTargetingService
     @State private var activeTuneItem: ConsumerScanItem?
+    @State private var activeCompositionItem: ConsumerScanItem?
     private enum ActiveScanSheet: Identifiable {
         case calibration(ConsumerScanItem)
         case comparator
@@ -38,6 +39,9 @@ public struct ConsumerScanFlowView: View {
                     }
                 )
                 .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else if let compItem = activeCompositionItem {
+                chemicalCompositionScreen(for: compItem)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
                 switch coordinator.flowStep {
                 case .home:
@@ -127,7 +131,7 @@ public struct ConsumerScanFlowView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 10)
 
-                    Text("Use sound waves and your iPhone to explore liquids and hear their mapped composition tune.")
+                    Text("Phone-only optical + acoustic screening for colored, cloudy, and fizzy beverages, plus experimental cup comparison.")
                         .font(.subheadline)
                         .foregroundStyle(Color(red: 0.20, green: 0.26, blue: 0.36))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -233,7 +237,7 @@ public struct ConsumerScanFlowView: View {
                                         )
                                 }
                             }
-                            Text("Lock Empty Cup & Water Blank to separate clear Water, Vinegar, Saline & Seltzer.")
+                            Text("Experimental stationary same-cup comparator (Empty → Water → Sample) for clear liquids.")
                                 .font(.caption)
                                 .foregroundStyle(Color(red: 0.30, green: 0.36, blue: 0.46))
                                 .multilineTextAlignment(.leading)
@@ -394,7 +398,7 @@ public struct ConsumerScanFlowView: View {
                         iconColor: LiquidAnalyzerPalette.resultGreenStart,
                         bgColor: Color(red: 0.90, green: 0.98, blue: 0.93),
                         title: "Identify Liquids",
-                        subtitle: "Water, beverages & reference profiles",
+                        subtitle: "Milk, oil, coffee, cola, juice & fizzy drinks",
                         action: { coordinator.openCameraAiming(graceDelaySeconds: 0.9) }
                     )
                     posterFeatureTile(
@@ -402,7 +406,7 @@ public struct ConsumerScanFlowView: View {
                         iconColor: LiquidAnalyzerPalette.compositionOrange,
                         bgColor: Color(red: 1.00, green: 0.95, blue: 0.89),
                         title: "See Composition",
-                        subtitle: "Simple, clear experimental cards",
+                        subtitle: "Formula, pH range & chemical constituents",
                         action: { openLatestResultOrHistory() }
                     )
                     posterFeatureTile(
@@ -554,9 +558,12 @@ public struct ConsumerScanFlowView: View {
 
     private func openLatestResultOrHistory() {
         if let latest = coordinator.history.first {
-            coordinator.openHistoryItem(latest)
+            coordinator.stopVoiceAnnouncement()
+            withAnimation(.easeInOut(duration: 0.24)) {
+                activeCompositionItem = latest
+            }
         } else {
-            coordinator.selectedTab = .history
+            coordinator.openCameraAiming(graceDelaySeconds: 0.9)
         }
     }
 
@@ -926,6 +933,295 @@ public struct ConsumerScanFlowView: View {
         }
     }
 
+    // MARK: - 3A. Dedicated Chemical Composition Screen & Card (Photo-Free)
+
+    private func chemicalCompositionScreen(for item: ConsumerScanItem) -> some View {
+        VStack(spacing: 0) {
+            topBrandHeader(showBackButton: true, showSettingsGear: true) {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    activeCompositionItem = nil
+                }
+            }
+
+            ScrollView {
+                VStack(spacing: 16) {
+                    VStack(spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text("Chemical Composition")
+                                .font(.system(size: 26, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Color(red: 0.06, green: 0.11, blue: 0.22))
+
+                            Button(action: {
+                                coordinator.speakResultAnnouncement(for: item)
+                            }) {
+                                Image(systemName: "speaker.wave.2.fill")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                                    .padding(8)
+                                    .background(
+                                        Circle()
+                                            .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
+                                    )
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Speak Chemical Result")
+                        }
+
+                        Text(
+                            item.status == .referenceMatch
+                                ? "\(item.title) • \(item.formulaDisplay)"
+                                : "Latest Scan Status: \(item.title)"
+                        )
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color(red: 0.30, green: 0.36, blue: 0.46))
+                        .multilineTextAlignment(.center)
+                    }
+                    .padding(.top, 14)
+                    .padding(.horizontal, 18)
+
+                    chemicalCompositionCard(for: item)
+
+                    HStack(spacing: 10) {
+                        Button(action: {
+                            activeCompositionItem = nil
+                            coordinator.openGuidedComparatorWizard()
+                        }) {
+                            Label("3-Step Comparator", systemImage: "checklist.checked")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 13)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(LiquidAnalyzerPalette.resultGreenStart)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: {
+                            activeCompositionItem = nil
+                            coordinator.openCameraAiming(graceDelaySeconds: 0.9)
+                        }) {
+                            Label("Scan Again", systemImage: "camera.viewfinder")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 13)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 28)
+                }
+            }
+            .background(Color(red: 0.95, green: 0.97, blue: 1.00))
+        }
+    }
+
+    @ViewBuilder
+    private func chemicalCompositionCard(for item: ConsumerScanItem) -> some View {
+        let matchedProfile = ReferenceLiquidProfile.matchingProfile(for: item)
+        let effectiveConstituents = !item.constituents.isEmpty
+            ? item.constituents
+            : (matchedProfile?.constituents ?? [])
+
+        if item.status == .referenceMatch {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("Chemical Composition", systemImage: "atom")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(LiquidAnalyzerPalette.compositionOrange)
+                    Spacer()
+                    Text("Reference Profile")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(LiquidAnalyzerPalette.resultGreenStart)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(LiquidAnalyzerPalette.resultGreenStart.opacity(0.14))
+                        )
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Molecular Formula")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Color(red: 0.34, green: 0.40, blue: 0.50))
+                        Spacer()
+                        Text(item.formulaDisplay)
+                            .font(.headline.weight(.heavy))
+                            .foregroundStyle(Color(red: 0.08, green: 0.14, blue: 0.24))
+                    }
+
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Typical pH Range")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Color(red: 0.34, green: 0.40, blue: 0.50))
+                        Spacer()
+                        Text(matchedProfile?.typicalPHRange ?? "Experimental Reference")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color(red: 0.14, green: 0.22, blue: 0.36))
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    if let category = matchedProfile?.categorySummary {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Molecular Class")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(Color(red: 0.34, green: 0.40, blue: 0.50))
+                            Spacer()
+                            Text(category)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(Color(red: 0.26, green: 0.32, blue: 0.42))
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.85))
+                )
+
+                if !effectiveConstituents.isEmpty {
+                    Text("Key Constituents")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color(red: 0.30, green: 0.36, blue: 0.46))
+
+                    ForEach(effectiveConstituents) { constituent in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(constituent.symbol)
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(Color(red: 0.10, green: 0.15, blue: 0.24))
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text(constituent.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Color(red: 0.16, green: 0.20, blue: 0.28))
+                                Text(constituent.roleDescription)
+                                    .font(.caption2)
+                                    .foregroundStyle(Color(red: 0.40, green: 0.45, blue: 0.54))
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(LiquidAnalyzerPalette.compositionWarmBg)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(LiquidAnalyzerPalette.compositionOrange.opacity(0.30), lineWidth: 1)
+                    )
+            )
+            .padding(.horizontal, 16)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: item.status == .emptyContainer ? "cup.and.saucer" : "flask")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(LiquidAnalyzerPalette.compositionOrange)
+                        .frame(width: 34, height: 34)
+                        .background(
+                            Circle()
+                                .fill(LiquidAnalyzerPalette.compositionOrange.opacity(0.14))
+                        )
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Chemical Profile Unavailable — Scan Inconclusive")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(Color(red: 0.12, green: 0.16, blue: 0.24))
+                        Text(inconclusiveCompositionSubtitle(for: item))
+                            .font(.caption)
+                            .foregroundStyle(Color(red: 0.36, green: 0.42, blue: 0.52))
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    compositionGuidanceRow(
+                        icon: "drop.halffull",
+                        title: "Best Phone-Only Targets",
+                        detail: "Colored, cloudy, viscous, or fizzy liquids (Milk, Cooking Oil, Coffee, Cola, Red Wine, Citrus Juice, Iced Tea, Sparkling Water)."
+                    )
+                    compositionGuidanceRow(
+                        icon: "checklist.checked",
+                        title: "Clear Liquids Require Stationary Comparison",
+                        detail: "Airborne phone audio cannot identify clear liquids cold. Keep the phone and identical cup stationary and lock Empty Cup → Water Blank → Sample."
+                    )
+                    compositionGuidanceRow(
+                        icon: "sun.max.fill",
+                        title: "Check Lighting & Calibration",
+                        detail: "Use even lighting without harsh reflections, keep the container steady, and re-run Step 1 (Empty Cup) if the glass was moved."
+                    )
+                }
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(red: 0.99, green: 0.97, blue: 0.94))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(LiquidAnalyzerPalette.compositionOrange.opacity(0.28), lineWidth: 1)
+                    )
+            )
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func inconclusiveCompositionSubtitle(for item: ConsumerScanItem) -> String {
+        switch item.status {
+        case .emptyContainer:
+            return "Empty Container / Low Coupling — no liquid load detected above dry shell baseline."
+        case .nonLiquidMaterial:
+            return "Solid or non-liquid surface detected — aim directly into an open liquid container."
+        case .unclearScan:
+            return "Audio reflection was too quiet, noisy, or clipped to compute a reliable profile."
+        case .unmatchedSignature:
+            if item.modeAScreeningState == .rejectedBaselineMismatch {
+                return "Saved Empty Cup baseline drifted — re-run Step 1 (Empty Cup) in your current setup."
+            }
+            if item.modeAScreeningState == .liquidLoaded {
+                return "Liquid load detected above Empty Cup, but chemical class was not matched."
+            }
+            return "No validated chemical match — uncalibrated clear glass and clear liquids cannot be separated cold."
+        case .referenceMatch:
+            return item.formulaDisplay
+        }
+    }
+
+    private func compositionGuidanceRow(icon: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(LiquidAnalyzerPalette.compositionOrange)
+                .frame(width: 18, alignment: .center)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color(red: 0.14, green: 0.18, blue: 0.28))
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(Color(red: 0.36, green: 0.42, blue: 0.52))
+            }
+        }
+    }
+
     // MARK: - 3. RESULT Screen
 
     private func resultScreen(for item: ConsumerScanItem) -> some View {
@@ -1001,8 +1297,7 @@ public struct ConsumerScanFlowView: View {
                             }
                             .padding(.top, 16)
 
-                            PlatformThumbnailView(jpegData: item.thumbnailJPEGData, size: 118)
-                                .padding(.vertical, 2)
+                            chemicalCompositionCard(for: item)
 
                             if let attr = item.fusionAttribution {
                                 MultiModalAttributionCardView(
@@ -1011,55 +1306,6 @@ public struct ConsumerScanFlowView: View {
                                         coordinator.openGuidedComparatorWizard()
                                     }
                                 )
-                            }
-
-                            if !item.constituents.isEmpty {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    HStack {
-                                        Label("Composition", systemImage: "chart.bar.fill")
-                                            .font(.subheadline.weight(.bold))
-                                            .foregroundStyle(LiquidAnalyzerPalette.compositionOrange)
-                                        Spacer()
-                                        Text("Experimental")
-                                            .font(.caption2.weight(.semibold))
-                                            .foregroundStyle(LiquidAnalyzerPalette.compositionOrange)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 3)
-                                            .background(
-                                                Capsule(style: .continuous)
-                                                    .fill(LiquidAnalyzerPalette.compositionOrange.opacity(0.14))
-                                            )
-                                    }
-
-                                    Divider()
-
-                                    ForEach(item.constituents) { constituent in
-                                        HStack(alignment: .firstTextBaseline) {
-                                            Text(constituent.symbol)
-                                                .font(.headline.weight(.bold))
-                                                .foregroundStyle(Color(red: 0.12, green: 0.15, blue: 0.22))
-                                            Spacer()
-                                            VStack(alignment: .trailing, spacing: 2) {
-                                                Text(constituent.name)
-                                                    .font(.subheadline.weight(.semibold))
-                                                    .foregroundStyle(Color(red: 0.16, green: 0.20, blue: 0.28))
-                                                Text(constituent.roleDescription)
-                                                    .font(.caption2)
-                                                    .foregroundStyle(Color(red: 0.40, green: 0.45, blue: 0.54))
-                                            }
-                                        }
-                                    }
-                                }
-                                .padding(16)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .fill(LiquidAnalyzerPalette.compositionWarmBg)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                                .stroke(LiquidAnalyzerPalette.compositionOrange.opacity(0.28), lineWidth: 1)
-                                        )
-                                )
-                                .padding(.horizontal, 16)
                             }
 
                             Text(item.scientificNote)

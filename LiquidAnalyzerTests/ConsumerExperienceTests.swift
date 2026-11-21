@@ -250,7 +250,8 @@ final class ConsumerExperienceTests: XCTestCase {
         let classifier = OnDeviceAcousticClassifier()
         let result = classifier.classifySamples(samples: samples, inverseFilter: nil, thumbnailJPEGData: cupJPEG)
         XCTAssertEqual(result.status, .unmatchedSignature)
-        XCTAssertEqual(result.title, "Unmatched Liquid")
+        XCTAssertEqual(result.title, "Inconclusive / No Fluid Detected")
+        XCTAssertTrue(result.constituents.isEmpty)
         XCTAssertNotEqual(result.formulaDisplay, "H₂O")
         XCTAssertFalse(result.tuneProfile.baseFrequenciesHz.isEmpty)
     }
@@ -285,9 +286,9 @@ final class ConsumerExperienceTests: XCTestCase {
             thumbnailJPEGData: cupJPEG
         )
 
-        // Stringent Ambiguity Gate R1 must hold back weak/close matches as Unmatched rather than guessing random chemicals
+        // Stringent Ambiguity Gate R1 must hold back weak/close matches as Inconclusive rather than guessing random chemicals
         XCTAssertEqual(r1.status, .unmatchedSignature)
-        XCTAssertEqual(r1.title, "Unmatched Liquid")
+        XCTAssertEqual(r1.title, "Inconclusive / No Fluid Detected")
         XCTAssertEqual(r1.scanSequenceNumber, 7)
 
         // All raw Repeatability Gate R1 telemetry must be populated and repeatable
@@ -449,10 +450,10 @@ final class ConsumerExperienceTests: XCTestCase {
                 scanSequenceNumber: idx,
                 thumbnailJPEGData: cupJPEG
             )
-            // True 6.15 kHz mode is preserved faithfully AND held back by Ambiguity Gate R1 as Unmatched Liquid
+            // True 6.15 kHz mode is preserved faithfully AND held back by Ambiguity Gate R1 as Inconclusive
             XCTAssertEqual(item.measuredPeakHz, 6_150.0, accuracy: 30.0)
             XCTAssertEqual(item.status, .unmatchedSignature)
-            XCTAssertEqual(item.title, "Unmatched Liquid")
+            XCTAssertEqual(item.title, "Inconclusive / No Fluid Detected")
             XCTAssertNotNil(item.rejectionReason)
         }
     }
@@ -1534,6 +1535,359 @@ final class ConsumerExperienceTests: XCTestCase {
                 autoSavedTargetID: CalibratedAcousticPrototype.waterReferenceTargetID
             ),
             "Plain water saved. Ready for your test liquid."
+        )
+    }
+
+    func testV050_Build19_EmptyCupNegativeControlsNeverClaimLiquidLoaded() throws {
+        let geom = GeometryTestCondition.stationary15InBaseline.rawValue
+        let classifier = OnDeviceAcousticClassifier()
+        let emptyMV = ModalVector4(
+            frequenciesHz: [2_130.0, 3_260.0, 4_120.0, 4_950.0],
+            validityMask: [1, 1, 1, 1],
+            qualityFactorsQ: [18.0, 22.0, 20.0, 19.0],
+            qValidityMask: [1, 1, 1, 1],
+            decayAlphaPerSec: [120.0, 140.0, 155.0, 165.0],
+            decayDBPerSec: [1_042.0, 1_216.0, 1_346.0, 1_433.0],
+            decayRSquared: [0.95, 0.94, 0.92, 0.91],
+            decayValidityMask: [1, 1, 1, 1],
+            spectralAttenuationSlopeDBPerKHz: -3.2,
+            bubbleScatter55to85DB: -10.4,
+            latePreRollNoiseDBFS: -76.0
+        )
+        let emptyFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 34.0,
+            peakDBFS: -20.0,
+            clippedSamples: 0,
+            dominantPeakHz: 2_130.0,
+            spectralCentroidHz: 3_420.0,
+            midToHighBandDB: 2.2,
+            decaySlopeDBPerSec: 1_042.0,
+            highFreqBubbleScatterDB: -10.4,
+            preRollExcessHFDB: -6.0,
+            modalVector: emptyMV
+        )
+        let emptyProto = CalibratedAcousticPrototype(
+            targetID: CalibratedAcousticPrototype.emptyContainerTargetID,
+            features: emptyFeat,
+            geometryCondition: geom
+        )
+        let tune = ReferenceLiquidProfile.provisionalLibrary[0].tuneProfile
+
+        // 1. Cold uncalibrated empty glass must NEVER claim "Liquid" or emit fake constituents
+        let clearCupJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (210, 210, 210),
+            rimRGB: (95, 98, 104),
+            innerRGB: (196, 198, 200)
+        )
+        let coldItem = ConsumerScanItem(
+            geometryCondition: geom,
+            status: .unmatchedSignature,
+            title: "Placeholder",
+            formulaDisplay: "NONE",
+            statusBadgeText: "Pending",
+            confidencePercent: nil,
+            scientificNote: "Cold",
+            constituents: [],
+            tuneProfile: tune,
+            measuredPeakHz: emptyFeat.dominantPeakHz,
+            measuredCentroidHz: emptyFeat.spectralCentroidHz,
+            measuredDecayDBPerSec: emptyFeat.decaySlopeDBPerSec,
+            measuredFeatures: emptyFeat,
+            thumbnailJPEGData: clearCupJPEG
+        )
+        let coldEvaluated = classifier.reevaluateExistingItem(coldItem, calibratedPrototypes: [])
+        XCTAssertEqual(coldEvaluated.status, .unmatchedSignature)
+        XCTAssertEqual(coldEvaluated.title, "Inconclusive / No Fluid Detected")
+        XCTAssertTrue(coldEvaluated.constituents.isEmpty)
+        XCTAssertEqual(ConsumerScanCoordinator.spokenAnnouncementText(for: coldEvaluated), "Inconclusive. No fluid identified.")
+
+        // 2. Calibrated empty glass with normal small jitter + ONE stray +11% room-echo outlier stays Empty Container!
+        let dryWithOutlierMV = ModalVector4(
+            frequenciesHz: [2_134.0, 3_255.0, 4_128.0, 5_495.0],
+            validityMask: [1, 1, 1, 1],
+            qualityFactorsQ: [18.2, 21.8, 19.6, 18.8],
+            qValidityMask: [1, 1, 1, 1],
+            decayAlphaPerSec: [122.0, 138.0, 152.0, 168.0],
+            decayDBPerSec: [1_060.0, 1_199.0, 1_320.0, 1_459.0],
+            decayRSquared: [0.95, 0.94, 0.92, 0.90],
+            decayValidityMask: [1, 1, 1, 1],
+            spectralAttenuationSlopeDBPerKHz: -3.1,
+            bubbleScatter55to85DB: -10.2,
+            latePreRollNoiseDBFS: -76.0
+        )
+        let dryOutlierFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 34.0,
+            peakDBFS: -20.0,
+            clippedSamples: 0,
+            dominantPeakHz: 2_134.0,
+            spectralCentroidHz: 3_435.0,
+            midToHighBandDB: 2.3,
+            decaySlopeDBPerSec: 1_060.0,
+            highFreqBubbleScatterDB: -10.2,
+            preRollExcessHFDB: -6.0,
+            modalVector: dryWithOutlierMV
+        )
+        let dryScan = ConsumerScanItem(
+            geometryCondition: geom,
+            status: .unmatchedSignature,
+            title: "Placeholder",
+            formulaDisplay: "NONE",
+            statusBadgeText: "Pending",
+            confidencePercent: nil,
+            scientificNote: "Dry outlier check",
+            constituents: [],
+            tuneProfile: tune,
+            measuredPeakHz: dryOutlierFeat.dominantPeakHz,
+            measuredCentroidHz: dryOutlierFeat.spectralCentroidHz,
+            measuredDecayDBPerSec: dryOutlierFeat.decaySlopeDBPerSec,
+            measuredFeatures: dryOutlierFeat,
+            thumbnailJPEGData: clearCupJPEG
+        )
+        let dryEvaluated = classifier.reevaluateExistingItem(dryScan, calibratedPrototypes: [emptyProto])
+        XCTAssertEqual(dryEvaluated.status, .emptyContainer)
+        XCTAssertEqual(dryEvaluated.modeAScreeningState, .emptyContainer)
+        XCTAssertEqual(dryEvaluated.title, "Empty Container / Low Coupling")
+
+        // 3. Moved / different container (+12% upward frequency jump across modes) triggers recalibration, NEVER "Liquid Loaded"!
+        let shiftedCupMV = ModalVector4(
+            frequenciesHz: [2_390.0, 3_650.0, 4_615.0, nil],
+            validityMask: [1, 1, 1, 0],
+            qualityFactorsQ: [19.0, 21.0, 20.0, nil],
+            qValidityMask: [1, 1, 1, 0],
+            decayAlphaPerSec: [115.0, 130.0, 145.0, nil],
+            decayDBPerSec: [998.0, 1_129.0, 1_259.0, nil],
+            decayRSquared: [0.94, 0.93, 0.92, nil],
+            decayValidityMask: [1, 1, 1, 0],
+            spectralAttenuationSlopeDBPerKHz: -3.0,
+            bubbleScatter55to85DB: -10.5,
+            latePreRollNoiseDBFS: -76.0
+        )
+        let shiftedFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 33.0,
+            peakDBFS: -21.0,
+            clippedSamples: 0,
+            dominantPeakHz: 2_390.0,
+            spectralCentroidHz: 3_760.0,
+            midToHighBandDB: 1.9,
+            decaySlopeDBPerSec: 998.0,
+            highFreqBubbleScatterDB: -10.5,
+            preRollExcessHFDB: -6.0,
+            modalVector: shiftedCupMV
+        )
+        let shiftedScan = ConsumerScanItem(
+            geometryCondition: geom,
+            status: .unmatchedSignature,
+            title: "Placeholder",
+            formulaDisplay: "NONE",
+            statusBadgeText: "Pending",
+            confidencePercent: nil,
+            scientificNote: "Shifted cup check",
+            constituents: [],
+            tuneProfile: tune,
+            measuredPeakHz: shiftedFeat.dominantPeakHz,
+            measuredCentroidHz: shiftedFeat.spectralCentroidHz,
+            measuredDecayDBPerSec: shiftedFeat.decaySlopeDBPerSec,
+            measuredFeatures: shiftedFeat,
+            thumbnailJPEGData: clearCupJPEG
+        )
+        let driftedEvaluated = classifier.reevaluateExistingItem(shiftedScan, calibratedPrototypes: [emptyProto])
+        XCTAssertEqual(driftedEvaluated.gateDecision, "STALE_BASELINE_RECALIBRATE")
+        XCTAssertEqual(driftedEvaluated.modeAScreeningState, .rejectedBaselineMismatch)
+        XCTAssertEqual(driftedEvaluated.title, "Inconclusive / No Fluid Detected")
+        XCTAssertEqual(ConsumerScanCoordinator.spokenAnnouncementText(for: driftedEvaluated), "Container shifted. Please recalibrate empty cup.")
+    }
+
+    @MainActor
+    func testV050_Build19_Step1EmptyCupCalibrationSurvivesOpticalNonLiquidAndFailsLoudlyOnDroppedFrames() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LiquidAnalyzer_B19_Cal_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let histStore = ConsumerHistoryStore(fileURL: tempDir.appendingPathComponent("history.json"))
+        let protoStore = CalibratedPrototypeStore(fileURL: tempDir.appendingPathComponent("protos.json"))
+        let logger = AuditLogger(logFileURL: tempDir.appendingPathComponent("audit.jsonl"))
+        let machine = AcquisitionStateMachine(auditLogger: logger)
+        let acq = AcquisitionCoordinator(stateMachine: machine, auditLogger: logger)
+        let coord = ConsumerScanCoordinator(
+            researchCoordinator: acq,
+            historyStore: histStore,
+            prototypeStore: protoStore
+        )
+
+        let geom = GeometryTestCondition.stationary15InBaseline.rawValue
+        let tune = ReferenceLiquidProfile.provisionalLibrary[0].tuneProfile
+
+        // Pre-seed a stale Water Blank baseline for the same geometry
+        let staleWater = CalibratedAcousticPrototype(
+            targetID: CalibratedAcousticPrototype.waterReferenceTargetID,
+            features: ExtractedConsumerFeatures(
+                activeSNRDB: 32.0, peakDBFS: -22.0, clippedSamples: 0,
+                dominantPeakHz: 2_010.0, spectralCentroidHz: 3_150.0,
+                midToHighBandDB: 3.1, decaySlopeDBPerSec: 880.0
+            ),
+            geometryCondition: geom
+        )
+        try protoStore.upsertBaselineVerified(staleWater)
+        XCTAssertTrue(protoStore.loadAll().contains(where: { $0.targetID == CalibratedAcousticPrototype.waterReferenceTargetID }))
+
+        // 1. Step 1 (Empty Cup) batch where optical fluid heuristic tagged EVERY frame `.nonLiquidMaterial`:
+        //    must NOT drop frames — must aggregate, save to disk, reload cleanly, AND invalidate stale Water Blank!
+        let emptyMV = ModalVector4(
+            frequenciesHz: [2_480.0, 3_520.0, nil, nil],
+            validityMask: [1, 1, 0, 0],
+            qualityFactorsQ: [19.0, 21.0, nil, nil],
+            qValidityMask: [1, 1, 0, 0],
+            decayAlphaPerSec: [125.0, 142.0, nil, nil],
+            decayDBPerSec: [1_086.0, 1_233.0, nil, nil],
+            decayRSquared: [0.95, 0.94, nil, nil],
+            decayValidityMask: [1, 1, 0, 0],
+            spectralAttenuationSlopeDBPerKHz: -2.8,
+            bubbleScatter55to85DB: -9.8,
+            latePreRollNoiseDBFS: -74.0
+        )
+        let emptySweeps: [ConsumerScanItem] = (1...6).map { idx in
+            let feat = ExtractedConsumerFeatures(
+                activeSNRDB: 33.0, peakDBFS: -21.0, clippedSamples: 0,
+                dominantPeakHz: 2_480.0 + Double(idx),
+                spectralCentroidHz: 3_410.0,
+                midToHighBandDB: 2.0,
+                decaySlopeDBPerSec: 1_086.0,
+                modalVector: emptyMV
+            )
+            return ConsumerScanItem(
+                batchRunID: "R1_6X_EMPTY_OPTICAL",
+                batchScanIndex: idx,
+                batchTotalCount: 6,
+                geometryCondition: geom,
+                status: .nonLiquidMaterial,
+                title: "Solid / Non-Liquid Material",
+                formulaDisplay: "No Liquid Container Detected",
+                statusBadgeText: "Solid Surface",
+                confidencePercent: nil,
+                scientificNote: "Optical heuristic flagged dry empty glass",
+                constituents: [],
+                tuneProfile: tune,
+                measuredPeakHz: feat.dominantPeakHz,
+                measuredCentroidHz: feat.spectralCentroidHz,
+                measuredDecayDBPerSec: feat.decaySlopeDBPerSec,
+                measuredFeatures: feat,
+                isConditioningCycle: idx <= 2
+            )
+        }
+
+        let savedEmpty = try coord.teachCalibratedBatchBaselineVerified(
+            items: emptySweeps,
+            targetID: CalibratedAcousticPrototype.emptyContainerTargetID
+        )
+        XCTAssertEqual(savedEmpty.targetID, CalibratedAcousticPrototype.emptyContainerTargetID)
+        XCTAssertEqual(savedEmpty.steadyStateSweepCount, 4)
+        XCTAssertTrue(coord.hasEmptyBaselineForSelectedGeometry)
+        XCTAssertFalse(coord.hasWaterBaselineForSelectedGeometry, "Fresh Empty Cup calibration must invalidate stale Water Blank")
+
+        // 2. Dropped / unclear frame batch must throw CalibrationError.baselineCaptureFailed loudly (never ghost-save!)
+        let droppedSweeps: [ConsumerScanItem] = (1...6).map { idx in
+            ConsumerScanItem(
+                batchRunID: "R1_6X_DROPPED",
+                batchScanIndex: idx,
+                batchTotalCount: 6,
+                geometryCondition: geom,
+                status: .unclearScan,
+                title: "Scan Unclear",
+                formulaDisplay: "Signal Check",
+                statusBadgeText: "Rescan Needed",
+                confidencePercent: nil,
+                scientificNote: "Buried in noise",
+                constituents: [],
+                tuneProfile: tune,
+                measuredPeakHz: 0,
+                measuredCentroidHz: 0,
+                measuredDecayDBPerSec: 0,
+                measuredFeatures: nil,
+                isConditioningCycle: idx <= 2
+            )
+        }
+
+        XCTAssertThrowsError(
+            try coord.teachCalibratedBatchBaselineVerified(
+                items: droppedSweeps,
+                targetID: CalibratedAcousticPrototype.waterReferenceTargetID
+            )
+        ) { err in
+            guard case CalibrationError.baselineCaptureFailed(let targetID, _) = err else {
+                XCTFail("Expected CalibrationError.baselineCaptureFailed, got \(err)")
+                return
+            }
+            XCTAssertEqual(targetID, CalibratedAcousticPrototype.waterReferenceTargetID)
+        }
+        XCTAssertFalse(coord.hasWaterBaselineForSelectedGeometry)
+
+        // Non-throwing UI wrapper must populate consumerAlertMessage loudly
+        let fallbackResult = coord.teachCalibratedBatchBaseline(
+            items: droppedSweeps,
+            targetID: CalibratedAcousticPrototype.waterReferenceTargetID
+        )
+        XCTAssertNil(fallbackResult)
+        XCTAssertNotNil(coord.consumerAlertMessage)
+        XCTAssertTrue(coord.consumerAlertMessage?.contains("Water Blank calibration failed") == true)
+    }
+
+    func testV050_Build19_ChemicalProfileMetadataAndInconclusiveVoiceAnnouncements() {
+        let tune = ReferenceLiquidProfile.provisionalLibrary[0].tuneProfile
+        let milkItem = ConsumerScanItem(
+            status: .referenceMatch,
+            title: "Milk",
+            formulaDisplay: "H₂O + Lactose · Lipids",
+            statusBadgeText: "v0.5.0 Fusion",
+            confidencePercent: 92,
+            scientificNote: "Matched Milk",
+            constituents: [],
+            tuneProfile: tune,
+            measuredPeakHz: 1_940.0,
+            measuredCentroidHz: 2_240.0,
+            measuredDecayDBPerSec: 112.0
+        )
+        let oilItem = ConsumerScanItem(
+            status: .referenceMatch,
+            title: "Cooking / Vegetable Oil",
+            formulaDisplay: "Triglyceride",
+            statusBadgeText: "v0.5.0 Fusion",
+            confidencePercent: 90,
+            scientificNote: "Matched Oil",
+            constituents: [],
+            tuneProfile: tune,
+            measuredPeakHz: 1_560.0,
+            measuredCentroidHz: 1_860.0,
+            measuredDecayDBPerSec: 128.0
+        )
+        let inconclusiveItem = ConsumerScanItem(
+            status: .unmatchedSignature,
+            title: "Inconclusive / No Fluid Detected",
+            formulaDisplay: "No Validated Fluid Match",
+            statusBadgeText: "Inconclusive • Calibration Needed",
+            confidencePercent: nil,
+            scientificNote: "No validated match",
+            constituents: [],
+            tuneProfile: tune,
+            measuredPeakHz: 2_400.0,
+            measuredCentroidHz: 3_100.0,
+            measuredDecayDBPerSec: 820.0,
+            modeAScreeningState: .noValidatedMatch
+        )
+
+        let milkProfile = ReferenceLiquidProfile.matchingProfile(for: milkItem)
+        XCTAssertNotNil(milkProfile)
+        XCTAssertTrue(milkProfile?.typicalPHRange.contains("6.5") == true)
+        XCTAssertFalse(milkProfile?.constituents.isEmpty ?? true)
+
+        let oilProfile = ReferenceLiquidProfile.matchingProfile(for: oilItem)
+        XCTAssertNotNil(oilProfile)
+        XCTAssertTrue(oilProfile?.typicalPHRange.contains("Non-Aqueous") == true)
+
+        XCTAssertNil(ReferenceLiquidProfile.matchingProfile(for: inconclusiveItem))
+        XCTAssertEqual(
+            ConsumerScanCoordinator.spokenAnnouncementText(for: inconclusiveItem),
+            "Inconclusive. No fluid identified."
         )
     }
 
