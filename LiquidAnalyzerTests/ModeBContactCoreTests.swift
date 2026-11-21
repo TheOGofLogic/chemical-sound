@@ -243,4 +243,64 @@ final class ModeBContactCoreTests: XCTestCase {
             }
         }
     }
+
+    func testModeB_MatterPerceptionEngineEnrollsPrototypesLoadsJSONAndClassifiesInDistribution() throws {
+        let dim = MatterPerceptionEngine.embeddingDimension
+        var waterProto = [Float](repeating: 0.0, count: dim)
+        waterProto[0] = 1.0
+        var oilProto = [Float](repeating: 0.0, count: dim)
+        oilProto[1] = 1.0
+
+        let engine = MatterPerceptionEngine()
+        engine.enrollPrototype(identifier: "H2O_DIST", embeddings: [waterProto, waterProto])
+
+        let jsonBank = try JSONEncoder().encode(["OIL_VEG": oilProto])
+        try engine.loadPrototypeBank(fromJSONData: jsonBank)
+        XCTAssertEqual(engine.enrolledIdentifiers, ["H2O_DIST", "OIL_VEG"])
+
+        // Noisy query near H2O_DIST (cos ≈ 0.985, cosineDistance ≈ 0.015)
+        var query = [Float](repeating: 0.0, count: dim)
+        query[0] = 0.985
+        query[2] = 0.172
+        let pred = engine.classifyEmbedding(
+            query,
+            acousticReliability: 0.94,
+            opticalReliability: 0.0,
+            predictedVelocity20CMps: 1_482.5
+        )
+        XCTAssertFalse(pred.isOutOfDistribution)
+        XCTAssertEqual(pred.identifier, "H2O_DIST")
+        XCTAssertGreaterThan(pred.confidence, 0.85)
+        XCTAssertLessThan(pred.cosineDistance, 0.05)
+        XCTAssertLessThan(pred.energyScore, engine.oodEnergyThreshold)
+        XCTAssertEqual(pred.predictedVelocity20CMps ?? 0.0, 1_482.5, accuracy: 0.01)
+    }
+
+    func testModeB_MatterPerceptionEngineRejectsOrthogonalOODAndLowReliabilityEmptyFrames() {
+        let dim = MatterPerceptionEngine.embeddingDimension
+        var waterProto = [Float](repeating: 0.0, count: dim)
+        waterProto[0] = 1.0
+        var oilProto = [Float](repeating: 0.0, count: dim)
+        oilProto[1] = 1.0
+
+        let engine = MatterPerceptionEngine(prototypes: [
+            "H2O_DIST": waterProto,
+            "OIL_VEG": oilProto
+        ])
+
+        // 1. Orthogonal unknown substance (cosineDistance = 1.0, high energy) -> OOD rejection
+        var unknown = [Float](repeating: 0.0, count: dim)
+        unknown[10] = 1.0
+        let oodPred = engine.classifyEmbedding(unknown, acousticReliability: 0.92, opticalReliability: 0.0)
+        XCTAssertTrue(oodPred.isOutOfDistribution)
+        XCTAssertEqual(oodPred.identifier, "Inconclusive / Unknown")
+        XCTAssertEqual(oodPred.confidence, 0.0, accuracy: 0.001)
+        XCTAssertGreaterThan(oodPred.energyScore, engine.oodEnergyThreshold)
+
+        // 2. Even an aligned embedding must be rejected when acoustic+optical reliability falls below floor (air-gap / empty cup)
+        let emptyCupPred = engine.classifyEmbedding(waterProto, acousticReliability: 0.08, opticalReliability: 0.0)
+        XCTAssertTrue(emptyCupPred.isOutOfDistribution)
+        XCTAssertEqual(emptyCupPred.identifier, "Inconclusive / Unknown")
+        XCTAssertEqual(emptyCupPred.confidence, 0.0, accuracy: 0.001)
+    }
 }
