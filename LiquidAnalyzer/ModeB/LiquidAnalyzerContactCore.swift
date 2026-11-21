@@ -271,18 +271,32 @@ public final class LiquidAnalyzerContactCore: @unchecked Sendable {
         )
     }
 
-    /// Matched-filter carrier polarity detector: correlates the RF echo slice around `centerIndex` with a zero-phase
-    /// reference transmit burst (`sin(2*pi*f0*t) * gaussian(t)`). Negative correlation signifies 180-degree phase inversion.
+    /// Matched-filter carrier polarity detector anchored to the peak-magnitude RF wavefront inside the echo window
+    /// (immune to envelope-top noise jitter): correlates against a zero-phase Gabor pulse `exp(-(t/sigma)^2) * cos(2*pi*f0*t)`.
+    /// Negative correlation signifies 180-degree phase inversion (`R < 0`, e.g. liquid -> air bubble).
     public func detectPhaseInversion(rfSignal: [Float], centerIndex: Int) -> Bool {
         let samplesPerPeriod = max(4.0, sampleRateHz / max(100_000.0, carrierFrequencyHz))
-        let halfWidth = max(6, Int(round(2.5 * samplesPerPeriod)))
-        var dot: Double = 0.0
-        for k in -halfWidth...halfWidth {
+        let searchRadius = max(6, Int(round(1.5 * samplesPerPeriod)))
+        var bestIdx = max(0, min(rfSignal.count - 1, centerIndex))
+        var maxAbs: Float = -1.0
+        for k in -searchRadius...searchRadius {
             let idx = centerIndex + k
             guard idx >= 0 && idx < rfSignal.count else { continue }
+            let a = abs(rfSignal[idx])
+            if a > maxAbs {
+                maxAbs = a
+                bestIdx = idx
+            }
+        }
+
+        let halfWidth = max(6, Int(round(2.0 * samplesPerPeriod)))
+        var dot: Double = 0.0
+        for k in -halfWidth...halfWidth {
+            let idx = bestIdx + k
+            guard idx >= 0 && idx < rfSignal.count else { continue }
             let t = Double(k) / sampleRateHz
-            let env = exp(-pow(Double(k) / (samplesPerPeriod * 1.5), 2.0))
-            let ref = env * sin(2.0 * .pi * carrierFrequencyHz * t)
+            let env = exp(-pow(Double(k) / (samplesPerPeriod * 1.15), 2.0))
+            let ref = env * cos(2.0 * .pi * carrierFrequencyHz * t)
             dot += Double(rfSignal[idx]) * ref
         }
         return dot < 0.0
@@ -398,7 +412,7 @@ extension LiquidAnalyzerContactCore {
 
         let samplesPerPeriod = sampleRateHz / max(100_000.0, carrierFrequencyHz)
 
-        func addPulse(at arrivalSec: Double, amplitude: Float, invertPhase: Bool, cycles: Double = 4.5) {
+        func addPulse(at arrivalSec: Double, amplitude: Float, invertPhase: Bool, cycles: Double = 4.0) {
             let centerSample = arrivalSec * sampleRateHz
             let centerIdx = Int(round(centerSample))
             let halfWidth = Int(ceil(cycles * samplesPerPeriod))
@@ -407,8 +421,9 @@ extension LiquidAnalyzerContactCore {
                 guard idx >= 0 && idx < totalSamples else { continue }
                 let dtSample = Double(idx) - centerSample
                 let t = dtSample / sampleRateHz
-                let env = exp(-pow(dtSample / (samplesPerPeriod * 1.45), 2.0))
-                let carrier = sin(2.0 * .pi * carrierFrequencyHz * t) * (invertPhase ? -1.0 : 1.0)
+                // Zero-phase Gabor wavelet: exact analytic envelope exp(-(t/sigma)^2) and unambiguous peak polarity (+R vs -R)
+                let env = exp(-pow(dtSample / (samplesPerPeriod * 1.15), 2.0))
+                let carrier = cos(2.0 * .pi * carrierFrequencyHz * t) * (invertPhase ? -1.0 : 1.0)
                 signal[idx] += amplitude * Float(env * carrier)
             }
         }
