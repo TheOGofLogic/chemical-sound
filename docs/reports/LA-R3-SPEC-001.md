@@ -1,6 +1,6 @@
 # LA-R3-SPEC-001: Phase R3 MODE_B Direct Structural Wall-Coupled Transducer Architecture
 
-**Status:** DRAFT v0.3 — HARDWARE BOM, HILBERT-TOF DSP & NDT PULSE-ECHO A-SCAN SPECIFIED  
+**Status:** DRAFT v0.4 — HARDWARE BOM, HILBERT-TOF DSP, NDT PULSE-ECHO A-SCAN & DUAL-FREQUENCY WAVE PHYSICS SPECIFIED  
 **Scope:** Direct contact guided-wave pulse-echo & pitch-catch physical chemical discrimination (`LiquidAnalyzerContactCore`)  
 **Airborne Engine Status:** LOCKED at `v0.4.1-build14-accepted` ([LA-R2-FINAL-ACCEPTANCE-REPORT.md](LA-R2-FINAL-ACCEPTANCE-REPORT.md) — `MODE_A` codebase untouched)
 **Standalone Multi-Modal Companion (`v0.5.0`):** `MODE_AF_FUSION` (Acoustic-Optical Mahalanobis Fusion + Guided 3-Step Cup Comparator) is implemented on `main` ([LA-V050-FUSION-PLAN-001.md](LA-V050-FUSION-PLAN-001.md)), preserving pure-acoustic `MODE_A` via `ConsumerInferenceMode.pureAcousticModeA` while keeping `MODE_B` (`LiquidAnalyzerContactCore`) isolated for external wall-coupled hardware.  
@@ -312,3 +312,40 @@ Before fabricating the full $40\text{ MSPS}$ custom RF front-end in Section 2, a
 - **Ultrasonic Front-End IC:** Texas Instruments `TUSS4470` (integrated transformer-drive ultrasonic pulser + logarithmic A-Scan envelope receiver, $40\text{ kHz}\text{--}1\text{ MHz}$) or `TDC1000` + `TDC7200` (55 ps stopwatch time-of-flight IC explicitly designed for liquid concentration & fluid ID).
 - **Transducer:** Sealed $1.0\text{ MHz}$ piezoelectric disc with a $2\text{ mm}$ Shore-00 silicone dry-couplant pad in a spring-loaded cup clip.
 - **iPhone Link:** `ESP32-S3` or `STM32` bridge streaming framed A-Scan envelope + exact $\Delta t$ (ns) + NTC wall temperature ($^\circ\text{C}$) over USB-C CDC or BLE GATT into `LiquidAnalyzerContactCore`.
+
+---
+
+## 7. Wave Physics, Wavelength Resolution, & Dual-Frequency Particle Detection (`v0.4`)
+
+To extract maximum structural and particulate information from a liquid sample without sacrificing full-container penetration, `MODE_B` transducer selection and signal processing obey four fundamental ultrasonic wave-propagation laws:
+
+### 7.1 Wavelength Resolution Limit & Sensitivity–Penetration Tradeoff
+Wavelength $\lambda$ in a liquid with longitudinal velocity $c$ at excitation frequency $f$ sets the minimum resolvable scatterer/discontinuity scale ($d_{\min} \approx \lambda / 2$):
+$$\lambda = \frac{c}{f}, \qquad d_{\min} \approx \frac{\lambda}{2}$$
+
+| Frequency Band | Wavelength in Water ($c = 1{,}482\text{ m/s}$) | Min. Direct Scatter Size ($\approx \lambda / 2$) | Penetration & Role in `MODE_B` |
+| :--- | :--- | :--- | :--- |
+| **`10 kHz` (Airborne iPhone)** | `34.3 mm` *(in air)* | `~17 mm` | Container-shell resonance only; physically blind to internal particles and bulk liquid speed. |
+| **`1.5 – 2.25 MHz` (Low-MHz Bulk Channel)** | `0.66 – 0.99 mm` | `0.33 – 0.50 mm` | Full-glass penetration ($60\text{--}100\text{ mm}$) even in turbid/viscous fluids; primary channel for bulk velocity $c_{\text{bulk}}$ (dissolved salt, sugar, vinegar, alcohol, oil). |
+| **`5 – 10 MHz` (High-MHz Particle Channel)** | `148 – 296 µm` | `74 – 148 µm` | Resolves suspended micro-bubbles, pulp, mineral grit, sediment, and coarse emulsions via backscatter & $\alpha(f) \propto f^2$ attenuation slope. |
+| **`25 – 50 MHz` (Micro-Acoustic)** | `30 – 59 µm` | `15 – 30 µm` | Resolves milk fat globules, yeast/pollen/silt, restricted to short pathlengths ($\le 5\text{--}15\text{ mm}$) due to $\alpha \propto f^2$ viscous absorption. |
+| **Molecular Scale (`0.3 – 1 nm` ions)** | *N/A for mechanical waves* | *Requires optical spectroscopy (Raman/NIR)* | Detected acoustically via **bulk macroscopic shifts** in density $\rho$ and adiabatic compressibility $\kappa$ ($c = 1/\sqrt{\rho \kappa}$), not single-molecule echoes. |
+
+Because liquid attenuation rises quadratically with frequency ($\alpha \propto f^2$), `MODE_B` adopts a **dual-frequency architecture**:
+1. **Bulk Velocity Channel (`1.5–2.25 MHz`):** Guarantees high-SNR opposite-wall echoes across standard drinking glasses to quantify invisible dissolved solutes ($c_{\text{bulk}, 20^\circ\text{C}}$).
+2. **Particulate & Micro-Bubble Channel (`5–10 MHz`):** Maximizes short-wavelength Rayleigh/Mie scattering sensitivity to detect suspended particles, cloudiness, and micro-bubbles.
+
+### 7.2 Wave Propagation Mode Selection Inside Liquids
+- **Longitudinal (Compression) Waves Only in Fluid Bulk:** Liquids cannot support shear stress, so only **straight-beam longitudinal waves** (incident normal to the cup wall, $0^\circ$) propagate through the liquid volume.
+- **Wall-Confined Shear / Plate Waves:** Angle-beam shear waves and Lamb plate waves remain confined to the solid glass/polymer wall and are used strictly as auxiliary boundary sensors (measuring shear-impedance viscous damping at the inner wall interface without entering the liquid core).
+
+### 7.3 Dead Zone & Fresnel Near-Field ($N$) Engineering
+Immediately beneath a single pulse-echo crystal lie two regions where amplitude measurements are unreliable:
+1. **Dead Zone:** Ring-down recovery time while the crystal switches from transmit to receive. Eliminated by placing a **silicone delay-line pad** ($\ge 3\text{--}5\text{ mm}$) in front of the element OR using a **Dual-Element (Pitch-Catch) transducer** with separate angled send/receive crystals so the dead zone remains outside the liquid column.
+2. **Near Field (Fresnel Zone) Length ($N$):** Constructive/destructive wavefront interference distorts echo amplitudes for $z < N$; clean exponential far-field (Fraunhofer) amplitude decay and peak sensitivity begin at $z \ge N$:
+   $$N = \frac{D_{\text{crystal}}^2}{4 \lambda} = \frac{D_{\text{crystal}}^2 \, f}{4 c}$$
+   - **Design Check:** Using a compact $D_{\text{crystal}} = 6.0\text{ mm}$ PZT element at $f = 2.25\text{ MHz}$ in water ($\lambda = 0.66\text{ mm}$) yields $N = 13.6\text{ mm}$. Across a standard $65\text{--}80\text{ mm}$ cup, the opposite-wall echo arrives well inside the stable **Far Field** ($z \approx 5 N$), ensuring repeatable amplitude & attenuation sizing.
+
+### 7.4 Acoustic Impedance Contrast & Multi-View Display Roadmap
+- **Impedance Contrast ($Z = \rho c$):** High-contrast scatterers (air micro-bubbles, mineral/sand grit, metallic particulates) produce strong intermediate A-Scan echoes prior to the back wall; near-matched colloidal droplets (emulsified fats, proteins) produce weaker discrete echoes and are characterized jointly via excess high-frequency attenuation ($\Delta \alpha_{10\text{ MHz}}$) and optical turbidity (`MODE_AF_FUSION`).
+- **Display Progression:** Start with single-point **A-Scan** (amplitude vs. transit time/depth with Monitor Gate A) for cup verification, expanding to time-indexed **B-Scan** (depth vs. time waterfall) to visualize settling sediment, rising micro-bubble plumes, and phase separation (e.g., oil-on-water layers) in real time.
