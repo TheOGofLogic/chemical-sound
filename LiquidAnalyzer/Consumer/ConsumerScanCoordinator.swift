@@ -414,6 +414,8 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 return "Carbonated liquid detected."
             case .rejectedBaselineMismatch:
                 return "Container shifted. Please recalibrate empty cup."
+            case .rejectedSignalQuality:
+                return "Scan unclear. Please hold steady and try again."
             case .emptyContainer:
                 return "Empty cup"
             case .nonstandardSurfaceResponse:
