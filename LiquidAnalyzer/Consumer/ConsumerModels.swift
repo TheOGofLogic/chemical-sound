@@ -705,6 +705,8 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
     public let expectedDecayDBPerSec: Double
     public let expectedHighScatterDB: Double
     public let typicalPHRange: String
+    public let typicalCompositionBreakdown: [String]
+    public let physicalReferenceNote: String
     public let tuneProfile: ChemicalTuneProfile
 
     public init(
@@ -719,6 +721,8 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
         expectedDecayDBPerSec: Double,
         expectedHighScatterDB: Double = -8.0,
         typicalPHRange: String? = nil,
+        typicalCompositionBreakdown: [String]? = nil,
+        physicalReferenceNote: String? = nil,
         tuneProfile: ChemicalTuneProfile
     ) {
         self.id = id
@@ -732,6 +736,8 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
         self.expectedDecayDBPerSec = expectedDecayDBPerSec
         self.expectedHighScatterDB = expectedHighScatterDB
         self.typicalPHRange = typicalPHRange ?? Self.typicalPHRange(forProfileID: id)
+        self.typicalCompositionBreakdown = typicalCompositionBreakdown ?? Self.typicalCompositionBreakdown(forProfileID: id)
+        self.physicalReferenceNote = physicalReferenceNote ?? Self.physicalReferenceNote(forProfileID: id)
         self.tuneProfile = tuneProfile
     }
 
@@ -1232,6 +1238,134 @@ public struct ReferenceLiquidProfile: Codable, Equatable, Identifiable, Sendable
         case "WINE_RED": return "pH 3.3 – 3.8 (Tartaric / Malic Acid)"
         case "TEA_AMBER": return "pH 4.9 – 5.5 (Botanical Infusion)"
         default: return "Reference Range Unavailable"
+        }
+    }
+
+    public static func typicalCompositionBreakdown(forProfileID id: String) -> [String] {
+        switch id {
+        case "H2O_DIST":
+            return [
+                "Dihydrogen Monoxide (H₂O) — primary neutral solvent",
+                "Trace dissolved minerals (Ca²⁺, Mg²⁺, HCO₃⁻) in potable tap water"
+            ]
+        case "NACL_AQ":
+            return [
+                "Aqueous solvent (H₂O)",
+                "Dissolved Sodium (Na⁺) & Chloride (Cl⁻) electrolyte ions"
+            ]
+        case "H2O2_AQ":
+            return [
+                "Purified Water (~97% in household grade)",
+                "Hydrogen Peroxide (H₂O₂, ~3%)"
+            ]
+        case "VIN_WHITE":
+            return [
+                "Water (~95% in household white vinegar)",
+                "Acetic Acid (CH₃COOH, ~5%)"
+            ]
+        case "SUC_AQ":
+            return [
+                "Water (~88–90%)",
+                "Dissolved Sucrose / Fructose (C₁₂H₂₂O₁₁ / C₆H₁₂O₆)"
+            ]
+        case "MILK_DAIRY":
+            return [
+                "Water (~87%)",
+                "Lactose (~4.8%)",
+                "Emulsified Milkfat (~3.8%)",
+                "Casein & Whey Proteins (~3.2%)"
+            ]
+        case "COFFEE_DARK":
+            return [
+                "Brewed Water (>98%)",
+                "Chlorogenic Acids & Roasted Melanoidins",
+                "Caffeine (C₈H₁₀N₄O₂)"
+            ]
+        case "CITRUS_JUICE":
+            return [
+                "Water (~88%)",
+                "Citric & Ascorbic Acids (C₆H₈O₇)",
+                "Natural Fruit Sugars & Suspended Pulp"
+            ]
+        case "AQUA_SURFACTANT":
+            return [
+                "Aqueous Carrier (H₂O)",
+                "Formulated Ionic & Non-Ionic Surfactants"
+            ]
+        case "ISOPROPYL_ALC":
+            return [
+                "Isopropyl Alcohol (C₃H₈O, ~70% typical)",
+                "Purified Water (~30%)"
+            ]
+        case "OIL_VEG":
+            return [
+                "Plant Triacylglycerols (C₅₅H₉₈O₆ family)",
+                "Oleic Acid esters (~43%)",
+                "Linoleic Acid esters (~35%)",
+                "Palmitic Acid esters (~10%)"
+            ]
+        case "SELTZER_CARBONATED":
+            return [
+                "Water (H₂O)",
+                "Dissolved CO₂ ⇌ Carbonic Acid (H₂O + CO₂ ⇌ H₂CO₃)"
+            ]
+        case "COLA_CARBONATED":
+            return [
+                "Carbonated Water (H₂O + CO₂ ⇌ H₂CO₃)",
+                "Phosphoric / Citric Acidulants",
+                "Caramel Color & Dissolved Sugars"
+            ]
+        case "WINE_RED":
+            return [
+                "Water (~85%)",
+                "Ethanol (C₂H₅OH, ~12–14%)",
+                "Tartaric / Malic Acids & Ruby Anthocyanin Pigments"
+            ]
+        case "TEA_AMBER":
+            return [
+                "Brewed Water (>99%)",
+                "Botanical Polyphenol Tannins & Catechins",
+                "Trace Caffeine"
+            ]
+        default:
+            return ["Experimental reference liquid profile"]
+        }
+    }
+
+    public static func physicalReferenceNote(forProfileID id: String) -> String {
+        switch id {
+        case "H2O_DIST":
+            return "Neutral calibration blank • Refractive index n ≈ 1.333 • Bulk sound speed c ≈ 1,482 m/s (20 °C)."
+        case "NACL_AQ":
+            return "Ionic electrolyte • Elevated density & bulk sound speed (c ≈ 1,535–1,585 m/s at 5–10% NaCl)."
+        case "H2O2_AQ":
+            return "Dilute peroxide • Micro-oxygen bubble nucleation on container walls • c ≈ 1,490–1,496 m/s."
+        case "VIN_WHITE":
+            return "Dilute organic acid • Lower surface tension (wider meniscus angle) • c ≈ 1,495–1,505 m/s."
+        case "SUC_AQ":
+            return "Aqueous carbohydrate • Elevated density, refractive index, & bulk sound speed (c ≈ 1,520–1,650 m/s)."
+        case "MILK_DAIRY":
+            return "Colloidal emulsion of fat globules & casein micelles • High optical turbidity & white scattering."
+        case "COFFEE_DARK":
+            return "Dark absorptive brew • Low optical transmission with no active effervescent bubble scatter."
+        case "CITRUS_JUICE":
+            return "Acidic fruit suspension • Chromatic citrus/berry hue paired with suspended pulp turbidity."
+        case "AQUA_SURFACTANT":
+            return "Formulated aqueous solution • Reduced surface tension & packaged container optics."
+        case "ISOPROPYL_ALC":
+            return "Volatile alcohol-water blend • Distinctly lower bulk sound speed (c ≈ 1,160–1,280 m/s)."
+        case "OIL_VEG":
+            return "Lipophilic triglyceride • High refractive index (n ≈ 1.47) & high acoustic attenuation • c ≈ 1,455 m/s."
+        case "SELTZER_CARBONATED":
+            return "Carbonated equilibrium (H₂O + CO₂ ⇌ H₂CO₃) • Active micro-bubble effervescence in HF scatter band."
+        case "COLA_CARBONATED":
+            return "Dark carbonated soda • Low optical transmission paired with active CO₂ micro-bubble scatter."
+        case "WINE_RED":
+            return "Fermented ethanol-polyphenol beverage • Translucent ruby meniscus halo & ethanolic wetting."
+        case "TEA_AMBER":
+            return "Translucent amber infusion • Moderate warm hue with low particulate turbidity."
+        default:
+            return "Typical textbook reference properties (literature values, not measured purity)."
         }
     }
 }

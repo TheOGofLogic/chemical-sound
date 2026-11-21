@@ -1891,6 +1891,21 @@ final class ConsumerExperienceTests: XCTestCase {
         )
     }
 
+    func testV050_Build20_EveryFusionProfileHasTypicalLiteratureCompositionAndPhysicalNote() {
+        let library = ReferenceLiquidProfile.fusionLibrary
+        XCTAssertGreaterThanOrEqual(library.count, 14)
+        for profile in library {
+            XCTAssertFalse(profile.typicalPHRange.isEmpty, "Missing pH range for \(profile.id)")
+            XCTAssertNotEqual(profile.typicalPHRange, "Reference Range Unavailable", "Default fallback pH for \(profile.id)")
+            XCTAssertFalse(profile.typicalCompositionBreakdown.isEmpty, "Missing literature breakdown for \(profile.id)")
+            XCTAssertFalse(profile.physicalReferenceNote.isEmpty, "Missing physical reference note for \(profile.id)")
+        }
+        let oil = library.first(where: { $0.id == "OIL_VEG" })
+        XCTAssertTrue(oil?.physicalReferenceNote.contains("1.47") == true)
+        let seltzer = library.first(where: { $0.id == "SELTZER_CARBONATED" })
+        XCTAssertTrue(seltzer?.physicalReferenceNote.contains("H₂CO₃") == true)
+    }
+
     // MARK: - Helpers
 
     private static func loadBundledESSAndInverse() throws -> (ess: [Float], inv: [Float]) {

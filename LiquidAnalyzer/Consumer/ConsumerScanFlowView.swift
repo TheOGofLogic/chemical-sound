@@ -1117,6 +1117,38 @@ public struct ConsumerScanFlowView: View {
                         .padding(.vertical, 2)
                     }
                 }
+
+                if let profile = matchedProfile, !profile.typicalCompositionBreakdown.isEmpty {
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Typical Literature Composition")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(Color(red: 0.30, green: 0.36, blue: 0.46))
+                            Spacer()
+                            Text("Reference Only")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(Color(red: 0.45, green: 0.50, blue: 0.58))
+                        }
+
+                        ForEach(profile.typicalCompositionBreakdown, id: \.self) { line in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text("•")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(LiquidAnalyzerPalette.compositionOrange)
+                                Text(line)
+                                    .font(.caption)
+                                    .foregroundStyle(Color(red: 0.22, green: 0.26, blue: 0.34))
+                            }
+                        }
+
+                        Text(profile.physicalReferenceNote)
+                            .font(.caption2)
+                            .foregroundStyle(Color(red: 0.38, green: 0.44, blue: 0.54))
+                            .padding(.top, 4)
+                    }
+                }
             }
             .padding(16)
             .background(
