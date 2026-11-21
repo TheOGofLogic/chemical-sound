@@ -171,6 +171,10 @@ public struct MultiModalFusionClassifier: Sendable {
 
         // 3. Evaluate Chromatic, Turbid, & Effervescent Consumer Liquid Prototypes in Mahalanobis Space
         let isClearNeutralOptics = vision.meanSaturationWB < 0.22 && vision.opticalTurbidity < 0.42 && vision.meanValueBrightness >= 0.24
+        let isCoolSurfactantTint = !bubbleDetected
+            && vision.meanHueDegrees >= 160.0 && vision.meanHueDegrees <= 205.0
+            && vision.meanSaturationWB >= 0.10
+            && vision.meniscusContactAngleDegrees >= 35.5
         let isDeconvolvedOrCalibrated = hasInverseDeconv || (deltaEmpty?.compatible == true) || (deltaWater?.compatible == true)
 
         // 3A. Clear Neutral Liquid + Verified BUBBLE_SCATTER_DETECTED on real deconvolved / calibrated scan -> Carbonated Seltzer
@@ -204,8 +208,8 @@ public struct MultiModalFusionClassifier: Sendable {
             }
         }
 
-        // 3B. Non-Clear Chromatic or Turbid Consumer Liquids (Cooking Oil, Milk, Cola, Coffee, Red Wine, Citrus Juice, Iced Tea)
-        if !isClearNeutralOptics {
+        // 3B. Non-Clear Chromatic, Turbid, or Cool Surfactant Consumer Liquids (Cooking Oil, Milk, Soapy Water, Cola, Coffee, Red Wine, Citrus Juice, Iced Tea)
+        if !isClearNeutralOptics || isCoolSurfactantTint {
             let candidates = Self.scoreOpticalAcousticCandidates(
                 features: features,
                 visual: visual,
