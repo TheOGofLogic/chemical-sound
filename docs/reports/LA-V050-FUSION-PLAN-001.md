@@ -1,8 +1,8 @@
-# LA-V050-FUSION-PLAN-001: Multi-Modal Sensor Fusion & Guided 3-Step Cup Comparator (v0.5.0 Build 16)
+# LA-V050-FUSION-PLAN-001: Multi-Modal Sensor Fusion & Guided 3-Step Cup Comparator (v0.5.0 Build 19)
 
 - **Document ID:** `LA-V050-FUSION-PLAN-001`
-- **Status:** VERIFIED ON PINNED XCODE 27.2 (Codemagic Build #18: 45/45 XCTests Passed; Bumped to Build 16 for TestFlight Ingestion)
-- **Release Target:** v0.5.0 (CFBundleVersion = 16; prior Build 15 uploaded via Codemagic Build #17)
+- **Status:** BUILD 19 READY — GROUNDED SCOPE DEMARCATION, EMPTY-CUP NEGATIVE CONTROLS, VERIFIED STEP 1 CALIBRATION & PHOTO-FREE COMPOSITION UI
+- **Release Target:** v0.5.0 (`CFBundleVersion = 19`; prior Builds 16, 17, and 18 uploaded to TestFlight via Codemagic Builds #19–#21)
 - **Frozen Pure-Acoustic Baseline:** `v0.4.1-build14-accepted` (`6d067cff97ef1641cce3772e72da0cd14ad593ca`)
 - **Pinned Toolchain:** `xcode: "27.2"` (`macOS 27.2`, `Swift 6.4.2`, zero floating `latest` tags; cross-checked on `macos-15` / Xcode `16.4` / Swift `6.1.2`)
 - **Related Phase R3 Hardware Spec:** [`LA-R3-SPEC-001.md`](LA-R3-SPEC-001.md) (`MODE_B` External Wall-Coupled Ultrasonic Transducer — isolated future hardware track)
@@ -36,3 +36,16 @@ Following the initial `v0.5.0` implementation (`db000bf`, `57a40f8`), four targe
   - **Signed IPA Artifact (`40s`):** Generated `LiquidAnalyzer.ipa` (`2.07 MB`) and `chemical-sound_18_artifacts.zip` (`23.94 KB`).
   - **Publishing Note:** App Store Connect returned `HTTP 409` (`ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE`) because `CFBundleVersion = 15` was already uploaded by Build #17. `CFBundleVersion` was bumped `15 -> 16` (`LiquidAnalyzer/Info.plist` + `codemagic.yaml`) for clean TestFlight ingestion in Codemagic Build #19.
 - **Baseline v0.5.0 Run #28 (`57a40f8`):** GitHub Actions `macos-26` passed (`44 / 44` XCTests + `1.5 MB` unsigned IPA); `macos-15` failed solely at `ConsumerScanCoordinator.swift:395` (remediated in `8a4d43f`). Subsequent GitHub Actions runs (`#29`–`#35`) were cancelled prior to step execution due to GitHub hosted macOS `arm64` runner capacity constraints.
+
+---
+
+## 4. Build 19 Scope Realignment & Core Fixes (`4f6534d`)
+Accepting the physical acoustic impedance boundary ($Z_{\text{air}} \ll Z_{\text{glass}} \ll Z_{\text{liquid}}$), `v0.5.0 Build 19` enforces clear domain demarcation:
+- **Phone-Only Direct Mode (`MODE_AF_FUSION`):** Targets visually distinct, colored, turbid, viscous, or carbonated liquids (`Milk`, `Cooking Oil`, `Coffee`, `Cola`, `Red Wine`, `Citrus Juice`, `Iced Tea`, `Carbonated Seltzer`).
+- **Experimental Comparative Mode (3-Step Cup Comparator):** Strictly stationary same-cup differential testing (`Empty → Water → Sample`) with live-camera aiming before each capture.
+- **Contact Transducer Track (`MODE_B`):** Reserved for direct wall-coupled $1\text{--}2.25\text{ MHz}$ ultrasonic pulse-echo hardware per [`LA-R3-SPEC-001.md`](LA-R3-SPEC-001.md) Section 6.
+
+Key technical fixes shipped in Build 19 (`49` total XCTests):
+1. **Empty-Cup Negative Controls (`OnDeviceAcousticClassifier.swift`, `MultiModalFusionClassifier.swift`):** Removed eager `"Unmatched Liquid"` fallback on uncalibrated scans (now `"Inconclusive / No Fluid Detected"` with empty constituents and honest voice output `"Inconclusive. No fluid identified."`). Added `evaluateEmptyBaselineLoadState` requiring an explicit multi-mode / downward mass-loading shift before claiming `Liquid Loaded`, preserving dry shell resonances (even with a single stray room-echo peak) as `Empty Container / Low Coupling`, and flagging moved/stale baselines as `STALE_BASELINE_RECALIBRATE`.
+2. **Verified Step 1 Calibration Persistence (`ConsumerModels.swift`, `ConsumerScanCoordinator.swift`):** Stopped dropping `.nonLiquidMaterial` frames when calibrating `EMPTY_CONTAINER`, added verified disk write + readback (`upsertBaselineVerified` / `teachCalibratedBatchBaselineVerified`), invalidated stale Water Blanks when locking a new Empty Cup, and surfaced `CalibrationError.baselineCaptureFailed` loudly so Step 2 never proceeds against a ghost baseline.
+3. **Photo-Free Chemical Composition Overhaul (`ConsumerScanFlowView.swift`, `ConsumerModels.swift`):** Decoupled `PlatformThumbnailView` from Result and dedicated **See Composition** views, added textbook `typicalPHRange` and molecular class metadata to all reference profiles, and built a dedicated structured `"Chemical Profile Unavailable — Scan Inconclusive"` guidance card when unmatched or empty.

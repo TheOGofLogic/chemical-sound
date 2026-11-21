@@ -1,6 +1,6 @@
 # LA-R3-SPEC-001: Phase R3 MODE_B Direct Structural Wall-Coupled Transducer Architecture
 
-**Status:** DRAFT v0.2 — HARDWARE BOM & HILBERT-TOF DSP SPECIFIED  
+**Status:** DRAFT v0.3 — HARDWARE BOM, HILBERT-TOF DSP & NDT PULSE-ECHO A-SCAN SPECIFIED  
 **Scope:** Direct contact guided-wave pulse-echo & pitch-catch physical chemical discrimination (`LiquidAnalyzerContactCore`)  
 **Airborne Engine Status:** LOCKED at `v0.4.1-build14-accepted` ([LA-R2-FINAL-ACCEPTANCE-REPORT.md](LA-R2-FINAL-ACCEPTANCE-REPORT.md) — `MODE_A` codebase untouched)
 **Standalone Multi-Modal Companion (`v0.5.0`):** `MODE_AF_FUSION` (Acoustic-Optical Mahalanobis Fusion + Guided 3-Step Cup Comparator) is implemented on `main` ([LA-V050-FUSION-PLAN-001.md](LA-V050-FUSION-PLAN-001.md)), preserving pure-acoustic `MODE_A` via `ConsumerInferenceMode.pureAcousticModeA` while keeping `MODE_B` (`LiquidAnalyzerContactCore`) isolated for external wall-coupled hardware.  
@@ -280,3 +280,35 @@ public final class TimeOfFlightCorrelator: Sendable {
 
 1. **Gate R3-0A (5-Condition Path Isolation):** Execute `PATH_01_FIXTURE_ONLY` through `PATH_05_AIR_BAFFLE_MOD` plus `Control K2` ($5.0\text{ N} \pm 20\%$ preload perturbation). Require complete disappearance of the opposite-wall chord echo ($t_{\text{opp}}$) on `PATH_02_EMPTY_ENGAGED` and `PATH_04_WATER_DISENGAGED`, and $< 0.15\%$ $c_{\text{bulk}}$ sensitivity across $\pm 0.5\text{ N}$ preload tolerance.
 2. **Gate R3-0B (Multi-Refill & Holdout-Container Chemical Separation):** Across $\ge 4$ independent refills $\times \ge 3$ lot-matched containers (`Water`, `Saline`, `Vinegar`, `Cooking Oil`, plus withheld open-set unknowns), require pairwise Mahalanobis separation $\ge 5\,\sigma_{\text{reposition}}$ and Nested LOBO-CV balanced accuracy $\ge 90\%$ on unseen containers before enabling consumer class labels.
+
+---
+
+## 6. Industrial NDT Ultrasonic Alignment & Rapid Prototype Track (`v0.3`)
+
+Standard industrial Non-Destructive Testing (NDT) ultrasonic inspection practices map directly onto `MODE_B` clear-liquid chemical identification:
+
+### 6.1 Core NDT Operating Principles Applied to Liquids
+1. **Air-Gap Elimination via Couplant:** High-frequency ultrasonic waves ($1\text{--}5\text{ MHz}$) cannot traverse an air gap. Like NDT contact probes requiring ultrasonic gel or oil couplant, `MODE_B` couples the piezo disc to the cup wall using a reusable conformable **silicone dry-couplant pad** (or water/gel reference film) under constant spring preload.
+2. **Pulse-Echo PRF & Quiet Listening Window:** Rather than continuous excitation, the pulser fires short damped bursts at a fixed **Pulse Repetition Frequency** (e.g., $\text{PRF} = 500\text{ Hz}$, giving a $2.0\text{ ms}$ quiet window between bursts). In water ($c \approx 1{,}482\text{ m/s}$), a $2.0\text{ ms}$ window permits $\approx 2.96\text{ m}$ of round-trip path — allowing clean separation of the initial pulse, wall ring-down, primary back-wall echo ($t_1$), and double reverberation echo ($t_2$) with zero wrap-around interference.
+3. **Double-Echo Glass-Wall Cancellation:** Measuring the differential lag $\Delta t = t_2 - t_1$ between the first and second liquid-column back-wall echoes cancels both the transducer wear-plate delay and the near glass wall thickness automatically:
+   $$c_{\text{bulk}}(T) = \frac{2 D_{\text{in}}}{t_2 - t_1}$$
+4. **Water Reference Calibration Block (NDT V2/IIW Equivalent):** Just as NDT operators calibrate sound-path distance and reference gain (dB) on a known `V2`/`IIW` steel calibration block before evaluating an unknown specimen, `MODE_B` calibrates inner diameter $D_{\text{in}}$ and baseline gain once on a known **Plain Water Blank** ($c_{20^\circ\text{C}} = 1{,}482\text{ m/s}$) before interrogating unknown clear liquids.
+5. **A-Scan Display, Monitor Gate A, & Contour-Echo Rejection:** The `MODE_B` iOS inspection UI renders a live **A-Scan** (X-axis = calibrated path distance in mm / transit time in $\mu\text{s}$; Y-axis = echo amplitude in dB with adjustable gain in $1\text{ dB}$ steps) overlaid with an automatic **Monitor Gate A** locked to the valid diametral liquid transit window ($[2 D_{\text{in}} / 1900\text{ m/s} \dots 2 D_{\text{in}} / 1100\text{ m/s}]$), rejecting near-wall ring-down and curved side-wall contour echoes.
+
+### 6.2 Reference Bulk Sound Velocity Table ($20.0^\circ\text{C}$, Atmospheric Pressure)
+
+| Liquid Class | Bulk Speed of Sound $c_{20^\circ\text{C}}$ (m/s) | Thermal Slope $\partial c / \partial T$ (m/(s·K)) | Typical Attenuation / Impedance Cue |
+| :--- | :--- | :--- | :--- |
+| **Pure / Tap Water ($\text{H}_2\text{O}$)** | `1,482` | `+2.9` | Low attenuation baseline; $Z \approx 1.48\text{ MRayl}$ |
+| **White Vinegar ($5\%$ $\text{CH}_3\text{COOH}$)** | `1,495 – 1,505` | `+2.6` | Slight velocity shift + elevated low-MHz attenuation |
+| **Salt / Saline Water ($5\text{--}10\%$ $\text{NaCl}$)** | `1,535 – 1,585` | `+2.4` | Strong positive velocity & density shift ($Z \approx 1.60\text{--}1.70\text{ MRayl}$) |
+| **Sugar Solution / Syrup ($10\text{--}30\%$)** | `1,520 – 1,650` | `+2.2` | High velocity + strong viscous echo damping |
+| **Hydrogen Peroxide ($3\%$ $\text{H}_2\text{O}_2$)** | `1,490 – 1,496` | `+2.8` | Micro-bubble backscatter attenuation |
+| **Cooking / Vegetable Oil (Triglycerides)** | `1,450 – 1,465` | `-3.2` | Lower velocity, **negative** thermal slope, high $\alpha$ |
+| **Ethanol / Isopropyl Alcohol ($70\text{--}100\%$)** | `1,160 – 1,280` | `-3.4` | Dramatic velocity drop ($-15\%$ to $-22\%$ vs. water) |
+
+### 6.3 Low-Cost Rapid Bench Prototype Path (TI `TUSS4470` / `TDC1000` Bridge)
+Before fabricating the full $40\text{ MSPS}$ custom RF front-end in Section 2, a low-cost (\$30–\$60) proof-of-concept `MODE_B` bench probe can be assembled from off-the-shelf industrial liquid-sensing parts:
+- **Ultrasonic Front-End IC:** Texas Instruments `TUSS4470` (integrated transformer-drive ultrasonic pulser + logarithmic A-Scan envelope receiver, $40\text{ kHz}\text{--}1\text{ MHz}$) or `TDC1000` + `TDC7200` (55 ps stopwatch time-of-flight IC explicitly designed for liquid concentration & fluid ID).
+- **Transducer:** Sealed $1.0\text{ MHz}$ piezoelectric disc with a $2\text{ mm}$ Shore-00 silicone dry-couplant pad in a spring-loaded cup clip.
+- **iPhone Link:** `ESP32-S3` or `STM32` bridge streaming framed A-Scan envelope + exact $\Delta t$ (ns) + NTC wall temperature ($^\circ\text{C}$) over USB-C CDC or BLE GATT into `LiquidAnalyzerContactCore`.
