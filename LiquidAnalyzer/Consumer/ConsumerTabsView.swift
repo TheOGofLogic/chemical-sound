@@ -772,6 +772,7 @@ public struct ConsumerMoreView: View {
     @ObservedObject var appCoordinator: AppCoordinator
     @ObservedObject var consumer: ConsumerScanCoordinator
     @State private var showResearchConfirmation = false
+    @State private var showModeBLab = false
 
     public init(appCoordinator: AppCoordinator, consumer: ConsumerScanCoordinator) {
         self.appCoordinator = appCoordinator
@@ -818,6 +819,11 @@ public struct ConsumerMoreView: View {
 
                 Section("Advanced") {
                     Button {
+                        showModeBLab = true
+                    } label: {
+                        Label("MODE_B Ultrasonic A-Scan Lab (Simulator)", systemImage: "waveform.path.ecg.rectangle")
+                    }
+                    Button {
                         showResearchConfirmation = true
                     } label: {
                         Label("Research & Developer Mode", systemImage: "flask")
@@ -828,11 +834,14 @@ public struct ConsumerMoreView: View {
                     LabeledContent("Application", value: "Liquid Analyzer")
                     LabeledContent(
                         "Version",
-                        value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.0") (Build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "20") • Multi-Modal Fusion)"
+                        value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.0") (Build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "21") • Multi-Modal Fusion)"
                     )
                 }
             }
             .navigationTitle("More")
+            .sheet(isPresented: $showModeBLab) {
+                ModeBAScanSimulatorView()
+            }
             .confirmationDialog(
                 "Open Research & Developer Mode?",
                 isPresented: $showResearchConfirmation,

@@ -567,6 +567,106 @@ public struct MultiModalFusionClassifier: Sendable {
         return diff > 180.0 ? (360.0 - diff) : diff
     }
 
+    /// Phase R3 `MODE_B` Contact Ultrasonic Fusion Classifier:
+    /// Evaluates wall-thickness-invariant longitudinal sound speed (`c_20C`), double-echo attenuation (`A2/A1`),
+    /// and boundary phase polarity (`hasInvertedBubbleEcho`) via Mahalanobis distance against `ReferenceLiquidProfile.fusionLibrary`.
+    public func evaluateModeBContactMeasurement(
+        _ measurement: UltrasonicMeasurement
+    ) -> MultiModalFusionDecision? {
+        let c20 = measurement.normalizedVelocity20CMps
+        let attenRatio = measurement.echoAttenuationRatio
+        let hasBubble = measurement.hasInvertedBubbleEcho
+        guard c20.isFinite, attenRatio.isFinite else { return nil }
+
+        let catalog = ReferenceLiquidProfile.fusionLibrary
+        struct ModeBTarget {
+            let profileID: String
+            let meanVelocityMps: Double
+            let sigmaVelocityMps: Double
+            let meanAttenRatio: Double
+            let sigmaAttenRatio: Double
+            let expectsInvertedBubble: Bool
+        }
+
+        let targets: [ModeBTarget] = [
+            ModeBTarget(profileID: "ISOPROPYL_ALC", meanVelocityMps: 1_210.0, sigmaVelocityMps: 65.0, meanAttenRatio: 0.56, sigmaAttenRatio: 0.16, expectsInvertedBubble: false),
+            ModeBTarget(profileID: "OIL_VEG", meanVelocityMps: 1_455.0, sigmaVelocityMps: 12.0, meanAttenRatio: 0.36, sigmaAttenRatio: 0.12, expectsInvertedBubble: false),
+            ModeBTarget(profileID: "H2O_DIST", meanVelocityMps: 1_482.0, sigmaVelocityMps: 7.5, meanAttenRatio: 0.72, sigmaAttenRatio: 0.14, expectsInvertedBubble: false),
+            ModeBTarget(profileID: "SELTZER_CARBONATED", meanVelocityMps: 1_482.0, sigmaVelocityMps: 10.0, meanAttenRatio: 0.58, sigmaAttenRatio: 0.18, expectsInvertedBubble: true),
+            ModeBTarget(profileID: "VIN_WHITE", meanVelocityMps: 1_500.0, sigmaVelocityMps: 7.0, meanAttenRatio: 0.68, sigmaAttenRatio: 0.14, expectsInvertedBubble: false),
+            ModeBTarget(profileID: "NACL_AQ", meanVelocityMps: 1_548.0, sigmaVelocityMps: 26.0, meanAttenRatio: 0.66, sigmaAttenRatio: 0.15, expectsInvertedBubble: false)
+        ]
+
+        var scored: [(profile: ReferenceLiquidProfile, distance: Double)] = []
+        for t in targets {
+            guard let profile = catalog.first(where: { $0.id == t.profileID }) else { continue }
+            let zVel = (c20 - t.meanVelocityMps) / t.sigmaVelocityMps
+            let zAtten = (attenRatio - t.meanAttenRatio) / t.sigmaAttenRatio
+            let zBubble: Double = (hasBubble == t.expectsInvertedBubble) ? 0.0 : 2.6
+            let dist = sqrt(zVel * zVel + 0.45 * zAtten * zAtten + zBubble * zBubble)
+            if dist.isFinite {
+                scored.append((profile, dist))
+            }
+        }
+        scored.sort { $0.distance < $1.distance }
+
+        guard let best = scored.first else { return nil }
+        let secondDist = scored.dropFirst().first?.distance ?? (best.distance + 1.5)
+        let margin = secondDist - best.distance
+        guard best.distance <= 2.40 && margin >= 0.25 else { return nil }
+
+        let conf = Self.confidenceFromMahalanobis(distance: best.distance, margin: margin)
+        let wallPolarity = (!measurement.firstEcho.isPhaseInverted && !measurement.secondEcho.isPhaseInverted)
+            ? "+R In-Phase (Rigid Glass Wall)"
+            : "Mixed/Inverted Boundary Polarity"
+        let bubbleSummary = hasBubble
+            ? "180° Phase-Inverted Air Bubble Echo Detected (-R)"
+            : "Clean Liquid Column (Zero Inverted Bubble Echoes)"
+
+        let attr = MultiModalAttribution(
+            inferenceMode: "MODE_B_ULTRASONIC_PULSE_ECHO",
+            acousticEvidenceSummary: String(
+                format: "c_20°C = %.1f m/s (Δt = %.2f µs, A₂/A₁ = %.2f, %.2f dB/cm) • %@",
+                c20,
+                measurement.transitGapMicroseconds,
+                attenRatio,
+                measurement.attenuationDBPerCm,
+                wallPolarity
+            ),
+            visionEvidenceSummary: bubbleSummary,
+            comparatorEvidenceSummary: String(
+                format: "Wall-Thickness-Invariant Double-Echo Solver (D = %.0f mm, T = %.1f °C)",
+                measurement.containerDiameterMeters * 1_000.0,
+                measurement.temperatureCelsius
+            ),
+            mahalanobisDistance: best.distance,
+            secondBestDistance: secondDist,
+            winningMargin: margin,
+            recommendsGuidedComparator: false
+        )
+
+        let ranked = scored.map {
+            CandidateScoreEntry(profileID: $0.profile.id, displayName: $0.profile.displayName, distance: $0.distance)
+        }
+
+        return MultiModalFusionDecision(
+            profile: best.profile,
+            confidencePercent: conf,
+            statusBadgeText: "MODE_B Pulse-Echo • \(conf)% Match",
+            scientificNote: String(
+                format: "Direct ultrasonic pulse-echo match (c_20°C = %.1f m/s, Δt = %.2f µs, d_M = %.2f, margin = +%.2f).",
+                c20,
+                measurement.transitGapMicroseconds,
+                best.distance,
+                margin
+            ),
+            gateDecision: "PASS_MODE_B_ULTRASONIC_FUSION",
+            screeningState: hasBubble ? .bubbleScatterDetected : .calibratedClassCandidate,
+            attribution: attr,
+            rankedCandidates: ranked
+        )
+    }
+
     private static func confidenceFromMahalanobis(distance: Double, margin: Double) -> Int {
         guard distance.isFinite, margin.isFinite else { return 70 }
         let fit = exp(-0.34 * max(0.0, distance))
