@@ -4,6 +4,7 @@
 **Scope:** Direct contact guided-wave pulse-echo & pitch-catch physical chemical discrimination (`LiquidAnalyzerContactCore`)  
 **Airborne Engine Status:** LOCKED at `v0.4.1-build14-accepted` ([LA-R2-FINAL-ACCEPTANCE-REPORT.md](LA-R2-FINAL-ACCEPTANCE-REPORT.md) — `MODE_A` codebase untouched)
 **Standalone Multi-Modal Companion (`v0.5.0`):** `MODE_AF_FUSION` (Acoustic-Optical Mahalanobis Fusion + Guided 3-Step Cup Comparator) is implemented on `main` ([LA-V050-FUSION-PLAN-001.md](LA-V050-FUSION-PLAN-001.md)), preserving pure-acoustic `MODE_A` via `ConsumerInferenceMode.pureAcousticModeA` while keeping `MODE_B` (`LiquidAnalyzerContactCore`) isolated for external wall-coupled hardware.  
+**Neural Perception Architecture (`MatterJEA`):** End-to-end CoreML/PyTorch multi-modal contrastive latent architecture (`E_acous` + `E_vis` + masked uncertainty-gated `G_fuse` + OOD Energy Gate) is specified in [`LA-ML-ARCH-001.md`](LA-ML-ARCH-001.md).  
 
 ---
 
