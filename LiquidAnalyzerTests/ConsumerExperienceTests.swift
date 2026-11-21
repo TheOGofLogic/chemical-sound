@@ -1922,12 +1922,15 @@ final class ConsumerExperienceTests: XCTestCase {
         )
         let neutralVisual = VisualContextSummary(
             hint: .openVesselAqueousOrGeneral,
+            vesselDetected: true,
             vesselConfidence: 0.72,
             solidSurfaceConfidence: 0.10,
+            hasBarcode: false,
+            innerSaturationWB: 0.10,
+            innerHueDegrees: 50.0,
             innerBrightness: 0.65,
             innerSpatialContrast: 0.04,
-            rimContrast: 0.12,
-            hasBarcode: false
+            rimContrast: 0.12
         )
 
         // 1. Real kitchen Cooking Oil (side-view tall glass: rim also golden, hue = 50.5°, sat = 0.334 vs neutral counter bg)
@@ -1951,7 +1954,8 @@ final class ConsumerExperienceTests: XCTestCase {
                 deltaEmpty: nil,
                 deltaWater: nil,
                 bubbleDetected: false,
-                hasInverseDeconv: true
+                hasInverseDeconv: true,
+                inferenceMode: .multiModalFusion
             )
         )
         XCTAssertEqual(oilDecision.profile.id, "OIL_VEG")
@@ -1972,7 +1976,8 @@ final class ConsumerExperienceTests: XCTestCase {
                 deltaEmpty: nil,
                 deltaWater: nil,
                 bubbleDetected: false,
-                hasInverseDeconv: true
+                hasInverseDeconv: true,
+                inferenceMode: .multiModalFusion
             )
         )
         XCTAssertEqual(milkDecision.profile.id, "MILK_DAIRY")
@@ -1998,7 +2003,8 @@ final class ConsumerExperienceTests: XCTestCase {
                 deltaEmpty: nil,
                 deltaWater: nil,
                 bubbleDetected: false,
-                hasInverseDeconv: true
+                hasInverseDeconv: true,
+                inferenceMode: .multiModalFusion
             )
         )
         XCTAssertEqual(soapyDecision.profile.id, "AQUA_SURFACTANT")
@@ -2024,7 +2030,8 @@ final class ConsumerExperienceTests: XCTestCase {
                 deltaEmpty: nil,
                 deltaWater: nil,
                 bubbleDetected: false,
-                hasInverseDeconv: true
+                hasInverseDeconv: true,
+                inferenceMode: .multiModalFusion
             )
         )
 
@@ -2048,7 +2055,8 @@ final class ConsumerExperienceTests: XCTestCase {
                 deltaEmpty: nil,
                 deltaWater: nil,
                 bubbleDetected: false,
-                hasInverseDeconv: true
+                hasInverseDeconv: true,
+                inferenceMode: .multiModalFusion
             )
         )
     }
