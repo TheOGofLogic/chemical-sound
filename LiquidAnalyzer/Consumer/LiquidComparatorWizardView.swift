@@ -291,12 +291,12 @@ public struct LiquidComparatorWizardView: View {
                 .foregroundStyle(Color(red: 0.32, green: 0.38, blue: 0.48))
 
             Button(action: {
-                coordinator.executeGuidedComparatorStep(step)
+                coordinator.armGuidedComparatorStepForAiming(step)
             }) {
                 HStack {
-                    Image(systemName: step == .testSample ? "waveform.badge.magnifyingglass" : "target")
+                    Image(systemName: "camera.viewfinder")
                         .font(.subheadline.weight(.bold))
-                    Text(completed ? "Re-Scan \(step.stepTitle)" : step.buttonLabel)
+                    Text(completed ? "Aim & Re-Scan \(step.stepTitle)" : "Aim & \(step.buttonLabel)")
                         .font(.subheadline.weight(.bold))
                     Spacer()
                     Image(systemName: "arrow.right.circle.fill")

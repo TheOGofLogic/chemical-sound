@@ -1493,6 +1493,50 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertLessThan(warmMilkVis.meanSaturationWB, 0.08)
     }
 
+    func testV050_Build18_VoiceAnnouncementPhrasesForLiquidsAndComparatorBaselines() {
+        func makeItem(status: ConsumerMatchStatus, title: String, formula: String) -> ConsumerScanItem {
+            ConsumerScanItem(
+                status: status,
+                title: title,
+                formulaDisplay: formula,
+                statusBadgeText: "Badge",
+                confidencePercent: 90,
+                scientificNote: "Note",
+                constituents: [],
+                tuneProfile: ReferenceLiquidProfile.provisionalLibrary[0].tuneProfile,
+                measuredPeakHz: 2_200.0,
+                measuredCentroidHz: 3_100.0,
+                measuredDecayDBPerSec: 720.0
+            )
+        }
+
+        let waterItem = makeItem(status: .referenceMatch, title: "Water", formula: "H₂O")
+        let saltItem = makeItem(status: .referenceMatch, title: "Salt / Saline Water", formula: "H₂O + NaCl")
+        let vinegarItem = makeItem(status: .referenceMatch, title: "Vinegar", formula: "H₂O + CH₃COOH")
+        let seltzerItem = makeItem(status: .referenceMatch, title: "Carbonated Seltzer", formula: "H₂O + CO₂(aq)")
+        let emptyItem = makeItem(status: .emptyContainer, title: "Empty Container", formula: "EMPTY")
+
+        XCTAssertEqual(ConsumerScanCoordinator.spokenAnnouncementText(for: waterItem), "Water")
+        XCTAssertEqual(ConsumerScanCoordinator.spokenAnnouncementText(for: saltItem), "Salt water")
+        XCTAssertEqual(ConsumerScanCoordinator.spokenAnnouncementText(for: vinegarItem), "Vinegar")
+        XCTAssertEqual(ConsumerScanCoordinator.spokenAnnouncementText(for: seltzerItem), "Carbonated seltzer")
+        XCTAssertEqual(ConsumerScanCoordinator.spokenAnnouncementText(for: emptyItem), "Empty cup")
+        XCTAssertEqual(
+            ConsumerScanCoordinator.spokenAnnouncementText(
+                for: emptyItem,
+                autoSavedTargetID: CalibratedAcousticPrototype.emptyContainerTargetID
+            ),
+            "Empty cup saved. Next, pour plain water."
+        )
+        XCTAssertEqual(
+            ConsumerScanCoordinator.spokenAnnouncementText(
+                for: waterItem,
+                autoSavedTargetID: CalibratedAcousticPrototype.waterReferenceTargetID
+            ),
+            "Plain water saved. Ready for your test liquid."
+        )
+    }
+
     // MARK: - Helpers
 
     private static func loadBundledESSAndInverse() throws -> (ess: [Float], inv: [Float]) {

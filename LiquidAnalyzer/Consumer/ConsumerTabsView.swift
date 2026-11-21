@@ -782,6 +782,7 @@ public struct ConsumerMoreView: View {
         NavigationStack {
             Form {
                 Section("Experience") {
+                    Toggle("Voice Result Announcements", isOn: $consumer.voiceAnnouncementsEnabled)
                     Toggle("Auto-Scan When Held Steady", isOn: $consumer.autoScanWhenSteady)
                     Toggle("Auto-Play Chemical Tune on Open", isOn: $consumer.autoPlayTunePreview)
                     Toggle("Vibration Feedback", isOn: $consumer.hapticsEnabled)
@@ -827,7 +828,7 @@ public struct ConsumerMoreView: View {
                     LabeledContent("Application", value: "Liquid Analyzer")
                     LabeledContent(
                         "Version",
-                        value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.0") (Build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "17") • Multi-Modal Fusion)"
+                        value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.0") (Build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "18") • Multi-Modal Fusion)"
                     )
                 }
             }

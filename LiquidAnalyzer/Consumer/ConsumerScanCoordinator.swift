@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 #if os(iOS)
+import AVFoundation
 import UIKit
 #endif
 
@@ -64,6 +65,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
         }
     }
     @Published public var hapticsEnabled: Bool = true
+    @Published public var voiceAnnouncementsEnabled: Bool = true
     @Published public var selectedGeometryCondition: GeometryTestCondition = .stationary15InBaseline
     @Published public var selectedControlSeriesTag: ControlSeriesTag = .unlabeledBlind
     @Published public var selectedInferenceMode: ConsumerInferenceMode = .multiModalFusion {
@@ -75,6 +77,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
     }
     @Published public var isComparatorWizardPresented: Bool = false
     @Published public var comparatorActiveStep: GuidedComparatorStep = .emptyCup
+    @Published public var armedComparatorStep: GuidedComparatorStep? = nil
     @Published public var comparatorBurstCount: Int = 6
     @Published public var isResearchConsolePresented: Bool = false
 
@@ -105,6 +108,9 @@ public final class ConsumerScanCoordinator: ObservableObject {
     private let prototypeStore: CalibratedPrototypeStore
     private var activeScanTask: Task<Void, Never>?
     private var consumerScanCounter: Int = 0
+    #if os(iOS)
+    private let speechSynthesizer = AVSpeechSynthesizer()
+    #endif
 
     public init(
         researchCoordinator: AcquisitionCoordinator,
@@ -137,6 +143,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
     }
 
     public func openCameraAiming(graceDelaySeconds: Double = 0.9) {
+        stopVoiceAnnouncement()
         tunePlayer.stop()
         consumerAlertMessage = nil
         scanProgress = 0.0
@@ -145,8 +152,10 @@ public final class ConsumerScanCoordinator: ObservableObject {
     }
 
     public func returnToHome() {
+        stopVoiceAnnouncement()
         activeScanTask?.cancel()
         activeScanTask = nil
+        armedComparatorStep = nil
         cameraService.stopCamera()
         tunePlayer.stop()
         scanProgress = 0.0
@@ -154,7 +163,13 @@ public final class ConsumerScanCoordinator: ObservableObject {
     }
 
     public func beginScan(isAutoTriggered: Bool = false) {
+        if let armedStep = armedComparatorStep {
+            armedComparatorStep = nil
+            executeGuidedComparatorStep(armedStep)
+            return
+        }
         guard activeScanTask == nil else { return }
+        stopVoiceAnnouncement()
         tunePlayer.stop()
         consumerAlertMessage = nil
         triggerLightHaptic()
@@ -191,6 +206,7 @@ public final class ConsumerScanCoordinator: ObservableObject {
     /// and preserving every individual acquisition (including quality-gate rejections) without silent drops.
     public func startRepeatabilityGateR1Batch(count: Int = 20) {
         guard activeScanTask == nil else { return }
+        stopVoiceAnnouncement()
         tunePlayer.stop()
         consumerAlertMessage = nil
         triggerLightHaptic()
@@ -248,12 +264,31 @@ public final class ConsumerScanCoordinator: ObservableObject {
         isComparatorWizardPresented = true
     }
 
-    /// Executes Step 1 (Empty Cup), Step 2 (Water Blank), or Step 3 (Test Liquid) of the Guided 3-Step Cup Comparator.
-    public func executeGuidedComparatorStep(_ step: GuidedComparatorStep) {
+    /// Arms a 3-Step Cup Comparator step and opens the live aiming camera so the user can focus on the glass before scanning.
+    public func armGuidedComparatorStepForAiming(_ step: GuidedComparatorStep) {
         guard activeScanTask == nil else { return }
+        stopVoiceAnnouncement()
         tunePlayer.stop()
         consumerAlertMessage = nil
         isComparatorWizardPresented = false
+        comparatorActiveStep = step
+        armedComparatorStep = step
+        selectedTab = .scan
+        openCameraAiming(graceDelaySeconds: 0.9)
+    }
+
+    public func cancelArmedComparatorStep() {
+        armedComparatorStep = nil
+    }
+
+    /// Executes Step 1 (Empty Cup), Step 2 (Water Blank), or Step 3 (Test Liquid) of the Guided 3-Step Cup Comparator.
+    public func executeGuidedComparatorStep(_ step: GuidedComparatorStep) {
+        guard activeScanTask == nil else { return }
+        stopVoiceAnnouncement()
+        tunePlayer.stop()
+        consumerAlertMessage = nil
+        isComparatorWizardPresented = false
+        armedComparatorStep = nil
         triggerLightHaptic()
 
         let targetN = max(5, min(20, comparatorBurstCount))
@@ -337,6 +372,74 @@ public final class ConsumerScanCoordinator: ObservableObject {
         guard hapticsEnabled else { return }
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
+        #endif
+    }
+
+    nonisolated public static func spokenAnnouncementText(
+        for item: ConsumerScanItem,
+        autoSavedTargetID: String? = nil
+    ) -> String {
+        if autoSavedTargetID == CalibratedAcousticPrototype.emptyContainerTargetID {
+            return "Empty cup saved. Next, pour plain water."
+        }
+        if autoSavedTargetID == CalibratedAcousticPrototype.waterReferenceTargetID {
+            return "Plain water saved. Ready for your test liquid."
+        }
+        switch item.status {
+        case .referenceMatch:
+            let lower = item.title.lowercased()
+            if lower == "water" || item.formulaDisplay == "H₂O" { return "Water" }
+            if lower.contains("saline") || lower.contains("salt") { return "Salt water" }
+            if lower.contains("vinegar") { return "Vinegar" }
+            if lower.contains("seltzer") { return "Carbonated seltzer" }
+            if lower.contains("oil") { return "Cooking oil" }
+            if lower.contains("milk") { return "Milk" }
+            if lower.contains("wine") { return "Red wine" }
+            if lower.contains("cola") { return "Cola" }
+            if lower.contains("coffee") { return "Coffee" }
+            if lower.contains("juice") || lower.contains("citrus") { return "Citrus juice" }
+            if lower.contains("tea") { return "Iced tea" }
+            return item.title.replacingOccurrences(of: " / ", with: " or ")
+        case .emptyContainer:
+            return "Empty cup"
+        case .nonLiquidMaterial:
+            return "Non-liquid surface"
+        case .unclearScan:
+            return "Scan unclear. Please hold steady and try again."
+        case .unmatchedSignature:
+            if item.fusionAttribution?.recommendsGuidedComparator == true {
+                return "Clear liquid detected. Lock empty cup and plain water in the 3-step cup comparator to identify water, salt water, or vinegar."
+            }
+            return "Liquid detected"
+        }
+    }
+
+    public func speakResultAnnouncement(
+        for item: ConsumerScanItem,
+        autoSavedTargetID: String? = nil
+    ) {
+        guard voiceAnnouncementsEnabled else { return }
+        let phrase = Self.spokenAnnouncementText(for: item, autoSavedTargetID: autoSavedTargetID)
+        guard !phrase.isEmpty else { return }
+        #if os(iOS)
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try? session.setActive(true)
+        let utterance = AVSpeechUtterance(string: phrase)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        speechSynthesizer.speak(utterance)
+        #endif
+    }
+
+    public func stopVoiceAnnouncement() {
+        #if os(iOS)
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
         #endif
     }
 
@@ -943,10 +1046,14 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 selectedTab = .scan
                 flowStep = .home
                 isComparatorWizardPresented = true
+                if let lastResultItem {
+                    speakResultAnnouncement(for: lastResultItem, autoSavedTargetID: autoSaveBaselineTargetID)
+                }
             } else if stayOnResultAfterBatch {
                 selectedTab = .scan
                 if let lastResultItem {
                     flowStep = .result(lastResultItem)
+                    speakResultAnnouncement(for: lastResultItem, autoSavedTargetID: autoSaveBaselineTargetID)
                 } else {
                     flowStep = .home
                 }
@@ -954,11 +1061,13 @@ public final class ConsumerScanCoordinator: ObservableObject {
                 selectedTab = .history
                 if let lastResultItem {
                     flowStep = .result(lastResultItem)
+                    speakResultAnnouncement(for: lastResultItem, autoSavedTargetID: autoSaveBaselineTargetID)
                 } else {
                     flowStep = .aim
                 }
             } else if let lastResultItem {
                 flowStep = .result(lastResultItem)
+                speakResultAnnouncement(for: lastResultItem, autoSavedTargetID: autoSaveBaselineTargetID)
             }
         } catch {
             isConfiguringSession = false

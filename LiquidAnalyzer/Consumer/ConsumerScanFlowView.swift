@@ -562,6 +562,7 @@ public struct ConsumerScanFlowView: View {
 
     private func openLatestChemicalTune() {
         if let latest = coordinator.history.first {
+            coordinator.stopVoiceAnnouncement()
             coordinator.tunePlayer.stop()
             withAnimation(.easeInOut(duration: 0.24)) {
                 activeTuneItem = latest
@@ -596,6 +597,34 @@ public struct ConsumerScanFlowView: View {
                 )
 
                 VStack(spacing: 8) {
+                    if let armedStep = coordinator.armedComparatorStep {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checklist.checked")
+                                .font(.caption.weight(.bold))
+                            Text("3-Step Comparator • \(armedStep.stepTitle)")
+                                .font(.caption.weight(.bold))
+                                .lineLimit(1)
+                            Spacer()
+                            Button(action: {
+                                coordinator.cancelArmedComparatorStep()
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.88))
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(LiquidAnalyzerPalette.resultGreenStart.opacity(0.92))
+                        )
+                        .padding(.top, 8)
+                    }
+
                     HStack(spacing: 8) {
                         Button(action: {
                             coordinator.autoScanWhenSteady.toggle()
@@ -739,7 +768,7 @@ public struct ConsumerScanFlowView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "waveform")
                                     .font(.system(size: 16, weight: .bold))
-                                Text("SCAN 1×")
+                                Text(primaryAimScanButtonTitle)
                                     .font(.system(size: 15, weight: .bold, design: .rounded))
                             }
                             .foregroundStyle(.white)
@@ -759,42 +788,59 @@ public struct ConsumerScanFlowView: View {
                                     )
                             )
                             .shadow(color: LiquidAnalyzerPalette.scanBlue.opacity(0.45), radius: 10, y: 4)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
 
-                        Button(action: {
-                            coordinator.startRepeatabilityGateR1Batch(count: 20)
-                        }) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "repeat.circle.fill")
-                                    .font(.system(size: 16, weight: .bold))
-                                Text("RUN R1 (20×)")
-                                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                            }
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [
-                                                LiquidAnalyzerPalette.resultGreenStart,
-                                                LiquidAnalyzerPalette.scanBlue
-                                            ],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
+                        if coordinator.armedComparatorStep == nil {
+                            Button(action: {
+                                coordinator.startRepeatabilityGateR1Batch(count: 20)
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "repeat.circle.fill")
+                                        .font(.system(size: 16, weight: .bold))
+                                    Text("RUN R1 (20×)")
+                                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                                }
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [
+                                                    LiquidAnalyzerPalette.resultGreenStart,
+                                                    LiquidAnalyzerPalette.scanBlue
+                                                ],
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            )
                                         )
-                                    )
-                            )
-                            .shadow(color: LiquidAnalyzerPalette.resultGreenStart.opacity(0.45), radius: 10, y: 4)
+                                )
+                                .shadow(color: LiquidAnalyzerPalette.resultGreenStart.opacity(0.45), radius: 10, y: 4)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(.bottom, 76)
                 }
                 .padding(.horizontal, 16)
             }
+        }
+    }
+
+    private var primaryAimScanButtonTitle: String {
+        switch coordinator.armedComparatorStep {
+        case .emptyCup:
+            return "SCAN EMPTY CUP"
+        case .waterBlank:
+            return "SCAN WATER BLANK"
+        case .testSample:
+            return "SCAN TEST LIQUID"
+        case nil:
+            return "SCAN 1×"
         }
     }
 
@@ -906,10 +952,28 @@ public struct ConsumerScanFlowView: View {
 
                         VStack(spacing: 14) {
                             VStack(spacing: 4) {
-                                Text(item.title)
-                                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                                    .foregroundStyle(Color(red: 0.06, green: 0.10, blue: 0.18))
-                                    .multilineTextAlignment(.center)
+                                HStack(spacing: 8) {
+                                    Text(item.title)
+                                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                                        .foregroundStyle(Color(red: 0.06, green: 0.10, blue: 0.18))
+                                        .multilineTextAlignment(.center)
+
+                                    Button(action: {
+                                        coordinator.speakResultAnnouncement(for: item)
+                                    }) {
+                                        Image(systemName: "speaker.wave.2.fill")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                                            .padding(8)
+                                            .background(
+                                                Circle()
+                                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.12))
+                                            )
+                                            .contentShape(Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Speak Result")
+                                }
 
                                 Text(item.formulaDisplay)
                                     .font(.title3.weight(.semibold))
@@ -1021,6 +1085,7 @@ public struct ConsumerScanFlowView: View {
 
                             if item.status != .unclearScan && item.status != .nonLiquidMaterial && item.status != .emptyContainer {
                                 Button(action: {
+                                    coordinator.stopVoiceAnnouncement()
                                     withAnimation(.easeInOut(duration: 0.24)) {
                                         activeTuneItem = item
                                     }
