@@ -1,6 +1,6 @@
 # LA-R3-SPEC-001: Phase R3 MODE_B Direct Structural Wall-Coupled Transducer Architecture
 
-**Status:** DRAFT v0.4 — HARDWARE BOM, HILBERT-TOF DSP, NDT PULSE-ECHO A-SCAN & DUAL-FREQUENCY WAVE PHYSICS SPECIFIED  
+**Status:** LOCKED v1.0.0 — APPROVED FOR IMPLEMENTATION (`LiquidAnalyzer/ModeB/LiquidAnalyzerContactCore.swift` + `LiquidAnalyzerContactCore+Packet.swift`)  
 **Scope:** Direct contact guided-wave pulse-echo & pitch-catch physical chemical discrimination (`LiquidAnalyzerContactCore`)  
 **Airborne Engine Status:** LOCKED at `v0.4.1-build14-accepted` ([LA-R2-FINAL-ACCEPTANCE-REPORT.md](LA-R2-FINAL-ACCEPTANCE-REPORT.md) — `MODE_A` codebase untouched)
 **Standalone Multi-Modal Companion (`v0.5.0`):** `MODE_AF_FUSION` (Acoustic-Optical Mahalanobis Fusion + Guided 3-Step Cup Comparator) is implemented on `main` ([LA-V050-FUSION-PLAN-001.md](LA-V050-FUSION-PLAN-001.md)), preserving pure-acoustic `MODE_A` via `ConsumerInferenceMode.pureAcousticModeA` while keeping `MODE_B` (`LiquidAnalyzerContactCore`) isolated for external wall-coupled hardware.  
@@ -349,3 +349,47 @@ Immediately beneath a single pulse-echo crystal lie two regions where amplitude 
 ### 7.4 Acoustic Impedance Contrast & Multi-View Display Roadmap
 - **Impedance Contrast ($Z = \rho c$):** High-contrast scatterers (air micro-bubbles, mineral/sand grit, metallic particulates) produce strong intermediate A-Scan echoes prior to the back wall; near-matched colloidal droplets (emulsified fats, proteins) produce weaker discrete echoes and are characterized jointly via excess high-frequency attenuation ($\Delta \alpha_{10\text{ MHz}}$) and optical turbidity (`MODE_AF_FUSION`).
 - **Display Progression:** Start with single-point **A-Scan** (amplitude vs. transit time/depth with Monitor Gate A) for cup verification, expanding to time-indexed **B-Scan** (depth vs. time waterfall) to visualize settling sediment, rising micro-bubble plumes, and phase separation (e.g., oil-on-water layers) in real time.
+
+---
+
+## 8. Locked Hardware Transducer, AFE & Binary Wire-Protocol Spec (`v1.0.0`)
+
+**Direct Consumer:** [`LiquidAnalyzer/ModeB/LiquidAnalyzerContactCore.swift`](../../LiquidAnalyzer/ModeB/LiquidAnalyzerContactCore.swift) & [`LiquidAnalyzer/ModeB/LiquidAnalyzerContactCore+Packet.swift`](../../LiquidAnalyzer/ModeB/LiquidAnalyzerContactCore+Packet.swift)
+
+### 8.1 Acoustic Transducer & Interface Mechanicals
+
+| Subsystem Parameter | Specified Value | Engineering Justification & Constraint |
+| :--- | :--- | :--- |
+| **Piezo Element Type** | Lead Zirconate Titanate (`PZT-5A`) or `PMN-PT` Disc | High electromechanical coupling coefficient ($k_t \approx 0.49$) for crisp pulse transient response. |
+| **Center Frequency ($f_0$)** | `5.0 MHz` ($\pm 0.25\text{ MHz}$) | Optimal trade-off between axial resolution ($\lambda \approx 0.30\text{ mm}$ in water) and viscous attenuation in oils. |
+| **Active Aperture / Disc Diameter** | `10.0 mm` (Clear aperture `9.2 mm`) | Near-field length $N = D^2 / (4\lambda) \approx 83\text{ mm}$ in water; keeps the beam tightly collimated across $60\text{--}90\text{ mm}$ drinkware with minimal beam spread. |
+| **Damping / Backing** | Tungsten-loaded epoxy ($Z \approx 6\text{--}8\text{ MRayl}$) | Broad fractional bandwidth ($\ge 65\%$, $Q \approx 1.5$), giving a narrow ~2-cycle pulse for clean $t_1 / t_2$ double-echo separation. |
+| **Dry-Couplant Contact Pad** | Shore `00-35` Silicone Elastomer (`0.80 mm` thick) | Acoustic impedance $Z_{\text{pad}} \approx 1.45\text{ MRayl}$ matching liquid; displaces microscopic air gaps under modest hand preload ($2\text{--}5\text{ N}$) with zero sticky gel residue. |
+| **Front Matching Layer** | Alumina-loaded epoxy ($\lambda/4 \approx 0.11\text{ mm}$) | Quarter-wave impedance transformer between PZT ($Z \approx 33\text{ MRayl}$) and silicone pad ($Z \approx 1.45\text{ MRayl}$). |
+
+### 8.2 Analog Front-End (AFE) Electronics
+- **High-Voltage Pulser:** Negative unipolar MOSFET capacitive-discharge spike, `-45 V` nominal (software selectable `-25 V` to `-50 V`), fall time $\le 15\text{ ns}$, programmable pulse width `100 ns` ($1 / (2 f_0)$).
+- **T/R Switch Isolation:** Fast back-to-back PIN diode limiter clamping HV transmit spikes with $< 0.5\text{ dB}$ receive insertion loss.
+- **LNA / VGA & Anti-Alias Filter:** `+14 dB` to `+44 dB` Time-Gain Compensation (TGC) range, $< 1.2\text{ nV}/\sqrt{\text{Hz}}$ input-referred noise, followed by a 4th-order `8.5 MHz` low-pass Bessel filter.
+- **Digitizer / ADC:** `40.000 MSPS` (`25.0 ns`/sample, matching `LiquidAnalyzerContactCore.sampleRateHz`), 12-bit signed native packed into 16-bit signed little-endian integers. Default `220 µs` window (`8,800` samples) for standard `65 mm` vessels; dynamic `sampleCount` supports up to `12,000` samples (`300 µs`) for wider `80–90 mm` vessels or slow liquids (Ethanol).
+- **MCU / Bridge:** `nRF5340`, `STM32G474`, or `ESP32-S3` streaming framed binary A-Scans via **USB-C CDC** or **BLE 5.2 L2CAP**.
+
+### 8.3 Binary Wire-Protocol Frame Structure (Little-Endian)
+
+| Offset | Size (Bytes) | Field Name | Description / Constraints |
+| :--- | :--- | :--- | :--- |
+| `0x00` | `2` | `Sync Word` | `0xAA55` (Frame preamble) |
+| `0x02` | `2` | `Protocol Version` | `0x0001` (Major `0`, Minor `1`) |
+| `0x04` | `4` | `Sequence ID` | Monotonically increasing `uint32` |
+| `0x08` | `2` | `Container ID` | Encoded vessel type or `0` (Calibrated) |
+| `0x0A` | `2` | `Sample Count (N)` | Default `8,800` (`64 .. 32,768` samples) |
+| `0x0C` | `4` | `Sample Rate (Hz)` | `40,000,000` (`uint32`) |
+| `0x10` | `2` | `Temperature Raw` | `int16` (`0.01 °C` units; e.g. `2050 = 20.50 °C`) |
+| `0x12` | `2` | `Transducer Temp` | `int16` (`0.01 °C` onboard thermistor) |
+| `0x14` | `2` | `Gain Setting (dB)` | `int16` (`0.1 dB` units; e.g. `240 = +24.0 dB`) |
+| `0x16` | `2` | `Header CRC-16` | `CRC-16-CCITT` (poly `0x1021`, init `0xFFFF`) over `0x00 ..< 0x16` |
+| `0x18` | `2 * N` (`17,600`) | `RF Sample Payload` | `int16[N]` (`-2048 .. +2047` native 12-bit signed ADC) |
+| `0x18 + 2*N` (`0x44D8`) | `4` | `Payload CRC-32` | `CRC-32` (IEEE 802.3, poly `0xEDB88320`) over payload bytes |
+
+- **Exact Total Packet Size (for default `N = 8,800`):** `24 + 17,600 + 4 = 17,628 bytes` (payload CRC starts at byte offset `0x44D8`).
+- **Swift Zero-Copy Ingestion:** Implemented in [`LiquidAnalyzerContactCore+Packet.swift`](../../LiquidAnalyzer/ModeB/LiquidAnalyzerContactCore+Packet.swift) using alignment-safe `loadUnaligned` little-endian reads, full header CRC-16 + payload CRC-32 validation, and direct piping into `processAScan(rfSignal:temperatureCelsius:)` $\rightarrow$ `MultiModalFusionClassifier.evaluateModeBContactMeasurement(_:)`.

@@ -149,4 +149,98 @@ final class ModeBContactCoreTests: XCTestCase {
         let oilDecision = try XCTUnwrap(fusion.evaluateModeBContactMeasurement(coolOilMeas))
         XCTAssertEqual(oilDecision.profile.id, "OIL_VEG")
     }
+
+    func testModeB_BinaryWireProtocolRoundTripEndToEndThroughFusion() throws {
+        let core = LiquidAnalyzerContactCore(
+            sampleRateHz: 40_000_000.0,
+            carrierFrequencyHz: 5_000_000.0,
+            containerDiameterMeters: 0.065,
+            gateStartUs: 18.0,
+            gateEndUs: 260.0,
+            detectionThreshold: 0.14
+        )
+        let rawTrace = core.generateSimulatedTrace(
+            liquid: .saline,
+            wallThicknessMeters: 0.0035,
+            temperatureCelsius: 21.50,
+            snrDb: 34.0,
+            includeAirBubble: false,
+            deterministicSeed: 5001
+        )
+        let txHeader = LiquidAnalyzerContactCore.HardwareFrameHeader(
+            sequenceId: 42,
+            containerId: 7,
+            sampleCount: rawTrace.count,
+            sampleRate: 40_000_000.0,
+            liquidTemperatureC: 21.50,
+            transducerTemperatureC: 23.25,
+            analogGainDb: 28.5
+        )
+        let packet = LiquidAnalyzerContactCore.packHardwareRFFrame(header: txHeader, rfSignal: rawTrace)
+        XCTAssertEqual(packet.count, 24 + rawTrace.count * 2 + 4)
+
+        // Verify alignment-safe decoding even on a 1-byte-offset sliced stream buffer
+        var prefixed = Data([0xFF])
+        prefixed.append(packet)
+        let sliced = prefixed.dropFirst()
+
+        let (rxHeader, measOpt) = try core.processHardwareRFFrame(data: sliced)
+        XCTAssertEqual(rxHeader.sequenceId, 42)
+        XCTAssertEqual(rxHeader.containerId, 7)
+        XCTAssertEqual(rxHeader.sampleCount, rawTrace.count)
+        XCTAssertEqual(rxHeader.sampleRate, 40_000_000.0, accuracy: 0.1)
+        XCTAssertEqual(rxHeader.liquidTemperatureC, 21.50, accuracy: 0.01)
+        XCTAssertEqual(rxHeader.transducerTemperatureC, 23.25, accuracy: 0.01)
+        XCTAssertEqual(rxHeader.analogGainDb, 28.5, accuracy: 0.1)
+
+        let meas = try XCTUnwrap(measOpt)
+        XCTAssertEqual(meas.normalizedVelocity20CMps, 1_538.0, accuracy: 3.0)
+        let decision = try XCTUnwrap(MultiModalFusionClassifier().evaluateModeBContactMeasurement(meas))
+        XCTAssertEqual(decision.profile.id, "NACL_AQ")
+    }
+
+    func testModeB_BinaryWireProtocolRejectsBadSyncTruncationAndCorruptedCRCs() throws {
+        let samples = [Float](repeating: 0.1, count: 256)
+        let header = LiquidAnalyzerContactCore.HardwareFrameHeader(sequenceId: 1, sampleCount: samples.count)
+        let validPacket = LiquidAnalyzerContactCore.packHardwareRFFrame(header: header, rfSignal: samples)
+
+        // 1. Bad sync word
+        var badSync = validPacket
+        badSync[0] = 0x00
+        XCTAssertThrowsError(try LiquidAnalyzerContactCore.unpackHardwareRFFrame(data: badSync)) { err in
+            guard case LiquidAnalyzerContactCore.FrameDecodingError.invalidSyncWord = err else {
+                XCTFail("Expected invalidSyncWord, got \(err)")
+                return
+            }
+        }
+
+        // 2. Corrupted header byte -> Header CRC-16 mismatch
+        var badHeader = validPacket
+        badHeader[4] ^= 0x01
+        XCTAssertThrowsError(try LiquidAnalyzerContactCore.unpackHardwareRFFrame(data: badHeader)) { err in
+            guard case LiquidAnalyzerContactCore.FrameDecodingError.headerCRCMismatch = err else {
+                XCTFail("Expected headerCRCMismatch, got \(err)")
+                return
+            }
+        }
+
+        // 3. Corrupted payload byte -> Payload CRC-32 mismatch
+        var badPayload = validPacket
+        badPayload[30] ^= 0x80
+        XCTAssertThrowsError(try LiquidAnalyzerContactCore.unpackHardwareRFFrame(data: badPayload)) { err in
+            guard case LiquidAnalyzerContactCore.FrameDecodingError.payloadCRCMismatch = err else {
+                XCTFail("Expected payloadCRCMismatch, got \(err)")
+                return
+            }
+        }
+
+        // 4. Truncated payload
+        let truncated = validPacket.prefix(validPacket.count - 5)
+        XCTAssertThrowsError(try LiquidAnalyzerContactCore.unpackHardwareRFFrame(data: truncated)) { err in
+            guard case LiquidAnalyzerContactCore.FrameDecodingError.truncatedPayload = err else {
+                XCTFail("Expected truncatedPayload, got \(err)")
+                return
+            }
+        }
+    }
 }
