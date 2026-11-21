@@ -1222,8 +1222,8 @@ public struct OnDeviceAcousticClassifier: Sendable {
                 ? "BUBBLE_SCATTER_DETECTED: physical micro-bubble/effervescence scatter observed"
                 : "MODE_A_SCREENING_BOUNDARY: uncalibrated airborne reflection requires container baseline (Delta X_empty / Delta X_water)",
             status: .unmatchedSignature,
-            title: bubbleDetected ? "Bubble-Active Liquid" : "Inconclusive / No Fluid Detected",
-            formulaDisplay: bubbleDetected ? screenState.rawValue : "No Validated Fluid Match",
+            title: "Inconclusive / No Fluid Detected",
+            formulaDisplay: bubbleDetected ? "HF Scatter • Uncalibrated" : "No Validated Fluid Match",
             statusBadgeText: bubbleDetected ? "MODE_A Screening • Bubble Scatter Detected" : "Inconclusive • Calibration Needed",
             confidencePercent: nil,
             scientificNote: item.scientificNote,
@@ -2156,10 +2156,10 @@ public struct OnDeviceAcousticClassifier: Sendable {
         let badge: String
 
         if modeAScreeningState == .bubbleScatterDetected {
-            titleText = "Bubble-Active Liquid"
-            formulaText = "Effervescent Acoustic Profile"
+            titleText = "Inconclusive / No Fluid Detected"
+            formulaText = "HF Scatter • Uncalibrated"
             badge = "MODE_A Screening • Bubble Scatter Detected"
-            gateSummary = "MODE_A Screening detected elevated high-frequency micro-bubble / effervescence scatter without a calibrated container baseline."
+            gateSummary = "MODE_A Screening detected elevated high-frequency scatter without a calibrated container baseline. Lock Empty Cup & Water Blank or verify active effervescence."
         } else if modeAScreeningState == .rejectedBaselineMismatch {
             titleText = "Inconclusive / No Fluid Detected"
             formulaText = "Recalibrate Empty Cup"
