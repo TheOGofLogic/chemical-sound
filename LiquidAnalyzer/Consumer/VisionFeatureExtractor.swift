@@ -10,6 +10,8 @@ public struct VisionFeatureVector: Codable, Equatable, Sendable {
     public let meanValueBrightness: Double
     public let rimSaturationWB: Double
     public let rimValueBrightness: Double
+    public let outerBackgroundSaturationWB: Double
+    public let outerBackgroundValueBrightness: Double
     public let opticalTurbidity: Double
     public let meniscusContactAngleDegrees: Double
     public let meniscusCurvatureRatio: Double
@@ -25,6 +27,8 @@ public struct VisionFeatureVector: Codable, Equatable, Sendable {
         meanValueBrightness: Double,
         rimSaturationWB: Double = 0.0,
         rimValueBrightness: Double = 0.5,
+        outerBackgroundSaturationWB: Double = 0.0,
+        outerBackgroundValueBrightness: Double = 0.5,
         opticalTurbidity: Double,
         meniscusContactAngleDegrees: Double,
         meniscusCurvatureRatio: Double = 0.0,
@@ -39,6 +43,8 @@ public struct VisionFeatureVector: Codable, Equatable, Sendable {
         self.meanValueBrightness = meanValueBrightness
         self.rimSaturationWB = rimSaturationWB
         self.rimValueBrightness = rimValueBrightness
+        self.outerBackgroundSaturationWB = outerBackgroundSaturationWB
+        self.outerBackgroundValueBrightness = outerBackgroundValueBrightness
         self.opticalTurbidity = opticalTurbidity
         self.meniscusContactAngleDegrees = meniscusContactAngleDegrees
         self.meniscusCurvatureRatio = meniscusCurvatureRatio
@@ -159,6 +165,7 @@ public struct VisionFeatureExtractor: Sendable {
         var inGradSum = 0.0, inGradCnt = 0.0
 
         var rimRSum = 0.0, rimGSum = 0.0, rimBSum = 0.0, rimValSum = 0.0, rimCnt = 0.0
+        var outRSum = 0.0, outGSum = 0.0, outBSum = 0.0, outValSum = 0.0, outCnt = 0.0
         var haloSinSum = 0.0, haloCosSum = 0.0, haloSatSum = 0.0, haloCnt = 0.0
 
         for y in 2..<(grid - 2) {
@@ -216,6 +223,12 @@ public struct VisionFeatureExtractor: Sendable {
                     rimBSum += b
                     rimValSum += lumaWB
                     rimCnt += 1.0
+                } else if rad >= 0.66 {
+                    outRSum += r
+                    outGSum += g
+                    outBSum += b
+                    outValSum += lumaWB
+                    outCnt += 1.0
                 }
             }
         }
@@ -246,6 +259,14 @@ public struct VisionFeatureExtractor: Sendable {
         let rimSatWB = rimMax > 0.04 ? ((rimMax - rimMin) / rimMax) : 0.0
         let rimVal = rimCnt > 0 ? (rimValSum / rimCnt) : meanVal
 
+        let outR = outCnt > 0 ? outRSum / outCnt : rimR
+        let outG = outCnt > 0 ? outGSum / outCnt : rimG
+        let outB = outCnt > 0 ? outBSum / outCnt : rimB
+        let outMax = max(outR, max(outG, outB))
+        let outMin = min(outR, min(outG, outB))
+        let outSatWB = outMax > 0.04 ? ((outMax - outMin) / outMax) : 0.0
+        let outVal = outCnt > 0 ? (outValSum / outCnt) : rimVal
+
         let haloSat = haloCnt > 0 ? (haloSatSum / haloCnt) : 0.0
         let haloHueDeg: Double = {
             guard haloCnt > 0, (abs(haloSinSum) + abs(haloCosSum)) > 1e-5 else { return meanHueDeg }
@@ -260,25 +281,34 @@ public struct VisionFeatureExtractor: Sendable {
         let interiorEdgeDensity = inGradCnt > 0 ? (inGradSum / inGradCnt) : 0.02
 
         let opticalTurbidity: Double = {
-            // High-albedo opaque white colloidal scatter (Milk / Cream: luma > 0.85, near-zero chroma)
-            if meanLumaApprox > 0.85 && meanSatWB < 0.08 && lumaVar < 0.004 && (meanLumaApprox - rimVal) > 0.08 {
+            // 1A. Bright studio/top-down opaque white colloidal scatter (Milk / Cream)
+            if meanLumaApprox > 0.85 && meanSatWB < 0.09 && lumaVar < 0.006 && (meanLumaApprox - rimVal) > 0.08 {
                 return min(0.98, 0.85 + 0.13 * min(1.0, (meanLumaApprox - 0.85) / 0.12))
             }
-            // Deep optical absorption (Coffee / Cola / Red Wine)
-            if meanVal < 0.22 && (rimVal - meanLumaApprox) > 0.16 {
-                return min(0.82, 0.58 + (0.22 - meanVal))
+            // 1B. Real indoor side-view Milk / Cream: opaque bright neutral interior distinctly brighter than
+            //     surrounding room/counter (`outVal`), with smooth background-blocking texture (`interiorEdgeDensity < 0.013`)
+            let brightOverBg = meanLumaApprox - outVal
+            if meanLumaApprox >= 0.62 && meanSatWB <= 0.14 && interiorEdgeDensity < 0.013 && lumaVar < 0.018 && brightOverBg >= 0.06 {
+                let smoothTerm = max(0.0, 0.013 - interiorEdgeDensity) / 0.013
+                let contrastTerm = min(1.0, max(0.0, brightOverBg / 0.20))
+                return min(0.92, 0.66 + 0.14 * smoothTerm + 0.12 * contrastTerm)
             }
-            // Translucent golden cooking oil (high yellow-gold chroma with specular clarity, low diffuse scatter)
-            if meanHueDeg >= 38.0 && meanHueDeg <= 68.0 && meanSatWB >= 0.36 {
+            // 2. Deep optical absorption (Coffee / Cola / Red Wine — works both top-down and side-view)
+            let darkContrast = max(rimVal - meanLumaApprox, outVal - meanLumaApprox)
+            if meanVal < 0.26 && darkContrast > 0.14 {
+                return min(0.84, 0.58 + (0.26 - meanVal))
+            }
+            // 3. Translucent golden cooking oil (calibrated to real kitchen golden hue 38..66 deg, sat >= 0.24)
+            if meanHueDeg >= 38.0 && meanHueDeg <= 66.0 && meanSatWB >= 0.24 {
                 let edgeSuppression = max(0.0, 0.032 - interiorEdgeDensity) / 0.032
                 return min(0.34, 0.10 + 0.18 * edgeSuppression)
             }
-            // Cloudy chromatic juice / emulsion vs. clear aqueous pool
-            if meanSatWB >= 0.36 && (meanHueDeg < 38.0 || meanHueDeg > 325.0) {
+            // 4. Cloudy chromatic juice / emulsion vs. clear aqueous pool
+            if meanSatWB >= 0.30 && (meanHueDeg < 38.0 || meanHueDeg > 325.0) {
                 let scatterTerm = max(0.0, 0.045 - interiorEdgeDensity) / 0.045
                 return min(0.84, max(0.42, 0.44 + 0.32 * scatterTerm))
             }
-            // Clear neutral / slightly tinted aqueous solution
+            // 5. Clear neutral / slightly tinted aqueous solution
             let baseClear = min(0.32, max(0.04, 0.08 + 0.20 * max(0.0, 0.018 - interiorEdgeDensity) / 0.018))
             return baseClear
         }()
@@ -365,6 +395,8 @@ public struct VisionFeatureExtractor: Sendable {
             meanValueBrightness: meanVal,
             rimSaturationWB: rimSatWB,
             rimValueBrightness: rimVal,
+            outerBackgroundSaturationWB: outSatWB,
+            outerBackgroundValueBrightness: outVal,
             opticalTurbidity: opticalTurbidity,
             meniscusContactAngleDegrees: contactAngleDeg,
             meniscusCurvatureRatio: curvatureRatio,

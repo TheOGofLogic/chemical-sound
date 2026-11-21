@@ -223,15 +223,16 @@ public final class ConsumerScanCoordinator: ObservableObject {
         activeScanTask = Task { [weak self] in
             guard let self else { return }
             if !self.cameraService.isCameraLive {
-                // Phase R2-C (`LA-R2-C-PLAN-001` Sec. 2.4): Purge stale frames and start camera immediately (`graceDelaySeconds: 0.0`)
-                // so a back-to-back batch launch can never reuse the preceding run's captured thumbnail
+                // Phase R2-C / Build 22: Purge stale frames, boot camera, and allow auto-exposure to settle (~1.0s)
+                // so cold batch launches never lock onto a pitch-black initial sensor frame!
                 self.cameraService.clearCachedFrames()
                 self.cameraService.startCamera(graceDelaySeconds: 0.0)
+                try? await self.researchCoordinator.timing.sleepMilliseconds(900)
                 for _ in 0..<3 {
-                    try? await self.researchCoordinator.timing.sleepMilliseconds(300)
                     if self.cameraService.latestTargetingThumbnail() != nil {
                         break
                     }
+                    try? await self.researchCoordinator.timing.sleepMilliseconds(250)
                 }
             }
             _ = await self.cameraService.lockOpticsForControlledBatchIfLive()

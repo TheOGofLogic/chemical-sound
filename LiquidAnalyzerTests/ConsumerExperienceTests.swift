@@ -1906,6 +1906,153 @@ final class ConsumerExperienceTests: XCTestCase {
         XCTAssertTrue(seltzer?.physicalReferenceNote.contains("H₂CO₃") == true)
     }
 
+    func testV050_Build22_RealKitchenMilkOilSoapyWaterAndClearNegativeControls() throws {
+        let fusion = MultiModalFusionClassifier()
+        let baseFeat = ExtractedConsumerFeatures(
+            activeSNRDB: 31.0,
+            peakDBFS: -22.0,
+            clippedSamples: 0,
+            dominantPeakHz: 3_950.0,
+            spectralCentroidHz: 3_620.0,
+            midToHighBandDB: 2.0,
+            decaySlopeDBPerSec: 480.0,
+            highFreqBubbleScatterDB: -9.5,
+            spectralFlatness: 0.18,
+            peakProminenceDB: 18.0
+        )
+        let neutralVisual = VisualContextSummary(
+            hint: .openVesselAqueousOrGeneral,
+            vesselConfidence: 0.72,
+            solidSurfaceConfidence: 0.10,
+            innerBrightness: 0.65,
+            innerSpatialContrast: 0.04,
+            rimContrast: 0.12,
+            hasBarcode: false
+        )
+
+        // 1. Real kitchen Cooking Oil (side-view tall glass: rim also golden, hue = 50.5°, sat = 0.334 vs neutral counter bg)
+        let realOilVis = VisionFeatureVector(
+            hasCameraFrame: true,
+            meanHueDegrees: 50.5,
+            meanSaturationWB: 0.334,
+            meanValueBrightness: 0.68,
+            rimSaturationWB: 0.310,
+            rimValueBrightness: 0.62,
+            outerBackgroundSaturationWB: 0.06,
+            outerBackgroundValueBrightness: 0.56,
+            opticalTurbidity: 0.12,
+            meniscusContactAngleDegrees: 50.2
+        )
+        let oilDecision = try XCTUnwrap(
+            fusion.evaluate(
+                features: baseFeat,
+                visual: neutralVisual,
+                vision: realOilVis,
+                deltaEmpty: nil,
+                deltaWater: nil,
+                bubbleDetected: false,
+                hasInverseDeconv: true
+            )
+        )
+        XCTAssertEqual(oilDecision.profile.id, "OIL_VEG")
+
+        // 2. Real indoor side-view Milk (opaque white brighter than kitchen room bg, sat = 0.091)
+        let sideMilkJPEG = try Self.makeSyntheticReticleJPEG(
+            outerRGB: (132, 130, 128),
+            rimRGB: (196, 198, 202),
+            innerRGB: (200, 204, 212)
+        )
+        let sideMilkVis = VisionFeatureExtractor().extract(jpegData: sideMilkJPEG)
+        XCTAssertGreaterThanOrEqual(sideMilkVis.opticalTurbidity, 0.64)
+        let milkDecision = try XCTUnwrap(
+            fusion.evaluate(
+                features: baseFeat,
+                visual: neutralVisual,
+                vision: sideMilkVis,
+                deltaEmpty: nil,
+                deltaWater: nil,
+                bubbleDetected: false,
+                hasInverseDeconv: true
+            )
+        )
+        XCTAssertEqual(milkDecision.profile.id, "MILK_DAIRY")
+
+        // 3. Real kitchen Soapy Water (cyan/aqua dish-soap tint hue = 183.5°, sat = 0.119, meniscus = 37.6°)
+        let soapyVis = VisionFeatureVector(
+            hasCameraFrame: true,
+            meanHueDegrees: 183.5,
+            meanSaturationWB: 0.119,
+            meanValueBrightness: 0.58,
+            rimSaturationWB: 0.095,
+            rimValueBrightness: 0.55,
+            outerBackgroundSaturationWB: 0.04,
+            outerBackgroundValueBrightness: 0.52,
+            opticalTurbidity: 0.12,
+            meniscusContactAngleDegrees: 37.6
+        )
+        let soapyDecision = try XCTUnwrap(
+            fusion.evaluate(
+                features: baseFeat,
+                visual: neutralVisual,
+                vision: soapyVis,
+                deltaEmpty: nil,
+                deltaWater: nil,
+                bubbleDetected: false,
+                hasInverseDeconv: true
+            )
+        )
+        XCTAssertEqual(soapyDecision.profile.id, "AQUA_SURFACTANT")
+
+        // 4. Negative controls: Real Clear Water (hue 222.5°, sat 0.128, men 33.4°) and Empty Glass (sat 0.008) stay nil!
+        let realWaterVis = VisionFeatureVector(
+            hasCameraFrame: true,
+            meanHueDegrees: 222.5,
+            meanSaturationWB: 0.128,
+            meanValueBrightness: 0.62,
+            rimSaturationWB: 0.10,
+            rimValueBrightness: 0.64,
+            outerBackgroundSaturationWB: 0.05,
+            outerBackgroundValueBrightness: 0.66,
+            opticalTurbidity: 0.214,
+            meniscusContactAngleDegrees: 33.4
+        )
+        XCTAssertNil(
+            fusion.evaluate(
+                features: baseFeat,
+                visual: neutralVisual,
+                vision: realWaterVis,
+                deltaEmpty: nil,
+                deltaWater: nil,
+                bubbleDetected: false,
+                hasInverseDeconv: true
+            )
+        )
+
+        let realEmptyVis = VisionFeatureVector(
+            hasCameraFrame: true,
+            meanHueDegrees: 164.8,
+            meanSaturationWB: 0.008,
+            meanValueBrightness: 0.60,
+            rimSaturationWB: 0.01,
+            rimValueBrightness: 0.62,
+            outerBackgroundSaturationWB: 0.02,
+            outerBackgroundValueBrightness: 0.64,
+            opticalTurbidity: 0.080,
+            meniscusContactAngleDegrees: 62.8
+        )
+        XCTAssertNil(
+            fusion.evaluate(
+                features: baseFeat,
+                visual: neutralVisual,
+                vision: realEmptyVis,
+                deltaEmpty: nil,
+                deltaWater: nil,
+                bubbleDetected: false,
+                hasInverseDeconv: true
+            )
+        )
+    }
+
     // MARK: - Helpers
 
     private static func loadBundledESSAndInverse() throws -> (ess: [Float], inv: [Float]) {

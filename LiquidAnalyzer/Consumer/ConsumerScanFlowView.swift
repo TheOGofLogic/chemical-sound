@@ -262,121 +262,109 @@ public struct ConsumerScanFlowView: View {
                 .buttonStyle(.plain)
                 .padding(.horizontal, 18)
 
-                // Dedicated Repeatability Gate R1 (20x) & Control A-G Card (Visible directly on Home!)
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Label("Repeatability Gate R1 (20×)", systemImage: "repeat.circle.fill")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(Color(red: 0.06, green: 0.16, blue: 0.32))
-                        Spacer()
-                        Text(coordinator.autoScanWhenSteady ? "Auto-Scan ON" : "Auto-Scan OFF")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(coordinator.autoScanWhenSteady ? LiquidAnalyzerPalette.compositionOrange : LiquidAnalyzerPalette.resultGreenStart)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .fill((coordinator.autoScanWhenSteady ? LiquidAnalyzerPalette.compositionOrange : LiquidAnalyzerPalette.resultGreenStart).opacity(0.14))
-                            )
-                    }
-
-                    HStack(spacing: 8) {
-                        Menu {
-                            ForEach(ControlSeriesTag.allCases, id: \.rawValue) { tag in
-                                Button {
-                                    coordinator.selectedControlSeriesTag = tag
-                                } label: {
-                                    if coordinator.selectedControlSeriesTag == tag {
-                                        Label(tag.displayLabel, systemImage: "checkmark")
-                                    } else {
-                                        Text(tag.displayLabel)
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "tag.fill")
-                                Text(coordinator.selectedControlSeriesTag.displayLabel)
-                                    .lineLimit(1)
-                                Spacer(minLength: 2)
-                                Image(systemName: "chevron.up.chevron.down")
-                            }
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.10))
-                            )
-                        }
-
-                        Menu {
-                            ForEach(GeometryTestCondition.allCases, id: \.rawValue) { cond in
-                                Button {
-                                    coordinator.selectedGeometryCondition = cond
-                                } label: {
-                                    if coordinator.selectedGeometryCondition == cond {
-                                        Label(cond.displayLabel, systemImage: "checkmark")
-                                    } else {
-                                        Text(cond.displayLabel)
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "ruler")
-                                Text(coordinator.selectedGeometryCondition.displayLabel)
-                                    .lineLimit(1)
-                                Spacer(minLength: 2)
-                                Image(systemName: "chevron.up.chevron.down")
-                            }
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.10))
-                            )
-                        }
-                    }
-
-                    Toggle("Auto-Scan When Held Steady", isOn: $coordinator.autoScanWhenSteady)
-                        .font(.caption.weight(.semibold))
-
-                    Button(action: {
-                        coordinator.startRepeatabilityGateR1Batch(count: 20)
-                    }) {
+                // Collapsible Advanced Lab Batch (R1 20x) — tucked cleanly away so users don't mistake it for the main scan or 3-Step Comparator
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 8) {
-                            Image(systemName: "repeat.circle.fill")
-                                .font(.system(size: 18, weight: .bold))
-                            Text("RUN R1 (20×) BATCH")
-                                .font(.system(size: 15, weight: .bold, design: .rounded))
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [LiquidAnalyzerPalette.resultGreenStart, LiquidAnalyzerPalette.scanBlue],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
+                            Menu {
+                                ForEach(ControlSeriesTag.allCases, id: \.rawValue) { tag in
+                                    Button {
+                                        coordinator.selectedControlSeriesTag = tag
+                                    } label: {
+                                        if coordinator.selectedControlSeriesTag == tag {
+                                            Label(tag.displayLabel, systemImage: "checkmark")
+                                        } else {
+                                            Text(tag.displayLabel)
+                                        }
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "tag.fill")
+                                    Text(coordinator.selectedControlSeriesTag.displayLabel)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 2)
+                                    Image(systemName: "chevron.up.chevron.down")
+                                }
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.10))
                                 )
-                        )
+                            }
+
+                            Menu {
+                                ForEach(GeometryTestCondition.allCases, id: \.rawValue) { cond in
+                                    Button {
+                                        coordinator.selectedGeometryCondition = cond
+                                    } label: {
+                                        if coordinator.selectedGeometryCondition == cond {
+                                            Label(cond.displayLabel, systemImage: "checkmark")
+                                        } else {
+                                            Text(cond.displayLabel)
+                                        }
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "ruler")
+                                    Text(coordinator.selectedGeometryCondition.displayLabel)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 2)
+                                    Image(systemName: "chevron.up.chevron.down")
+                                }
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(LiquidAnalyzerPalette.scanBlue)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(LiquidAnalyzerPalette.scanBlue.opacity(0.10))
+                                )
+                            }
+                        }
+
+                        Toggle("Auto-Scan When Held Steady", isOn: $coordinator.autoScanWhenSteady)
+                            .font(.caption.weight(.semibold))
+
+                        Button(action: {
+                            coordinator.startRepeatabilityGateR1Batch(count: 20)
+                        }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "repeat.circle.fill")
+                                    .font(.system(size: 16, weight: .bold))
+                                Text("RUN R1 (20×) LAB BATCH")
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                            }
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(LiquidAnalyzerPalette.scanBlue)
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                } label: {
+                    HStack {
+                        Label("Advanced Lab Recorder (R1 20×)", systemImage: "slider.horizontal.3")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Color(red: 0.22, green: 0.28, blue: 0.38))
+                        Spacer()
+                    }
                 }
                 .padding(14)
                 .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .fill(Color.white)
-                        .shadow(color: Color.black.opacity(0.06), radius: 10, y: 4)
+                        .shadow(color: Color.black.opacity(0.04), radius: 6, y: 2)
                 )
                 .padding(.horizontal, 18)
 

@@ -834,7 +834,7 @@ public struct ConsumerMoreView: View {
                     LabeledContent("Application", value: "Liquid Analyzer")
                     LabeledContent(
                         "Version",
-                        value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.0") (Build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "21") • Multi-Modal Fusion)"
+                        value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.5.0") (Build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "22") • Multi-Modal Fusion)"
                     )
                 }
             }

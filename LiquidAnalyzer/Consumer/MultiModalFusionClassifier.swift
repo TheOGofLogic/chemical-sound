@@ -384,22 +384,47 @@ public struct MultiModalFusionClassifier: Sendable {
         catalog: [ReferenceLiquidProfile]
     ) -> [(profile: ReferenceLiquidProfile, distance: Double)] {
         var results: [(profile: ReferenceLiquidProfile, distance: Double)] = []
-        let satExcessOverRim = vision.meanSaturationWB - vision.rimSaturationWB
+        // Compare inner liquid against BOTH rim ring (top-down bowls) and outer background ring (side-view tall glasses!)
+        let effectiveSatContrast = max(
+            vision.meanSaturationWB - vision.rimSaturationWB,
+            vision.meanSaturationWB - vision.outerBackgroundSaturationWB
+        )
+        let effectiveBrightExcess = max(
+            vision.meanValueBrightness - vision.rimValueBrightness,
+            vision.meanValueBrightness - vision.outerBackgroundValueBrightness
+        )
+        let effectiveDarkDeficit = max(
+            vision.rimValueBrightness - vision.meanValueBrightness,
+            vision.outerBackgroundValueBrightness - vision.meanValueBrightness
+        )
 
-        // Check colored packaged bottle first (both rim and inner pool vivid cool hue 145..320 deg)
-        if visual.hint == .coloredPackagedBottle,
-           let pkg = catalog.first(where: { $0.id == "AQUA_SURFACTANT" }) {
-            results.append((pkg, 0.48))
+        // 0. Packaged Bottle OR Open-Glass Cool Cyan/Aqua Soapy Surfactant Solution (AQUA_SURFACTANT)
+        if let pkg = catalog.first(where: { $0.id == "AQUA_SURFACTANT" }) {
+            if visual.hint == .coloredPackagedBottle {
+                results.append((pkg, 0.48))
+            } else if !bubbleDetected,
+                      vision.meanHueDegrees >= 160.0 && vision.meanHueDegrees <= 205.0,
+                      vision.meanSaturationWB >= 0.10,
+                      effectiveSatContrast >= 0.05,
+                      vision.meniscusContactAngleDegrees >= 35.5,
+                      vision.meanValueBrightness >= 0.25 {
+                let dHue = circularHueDiff(vision.meanHueDegrees, 184.0) / 16.0
+                let dSat = max(0.0, 0.16 - vision.meanSaturationWB) / 0.08
+                let dMen = max(0.0, 38.0 - vision.meniscusContactAngleDegrees) / 6.0
+                let dist = sqrt(dHue * dHue + dSat * dSat + dMen * dMen + 0.16)
+                results.append((pkg, dist))
+            }
         }
 
-        // 1. Cooking / Vegetable Oil (OIL_VEG): Golden translucent chroma inside neutral rim, still meniscus
+        // 1. Cooking / Vegetable Oil (OIL_VEG): Golden yellow-amber chroma (38..66 deg), calibrated for real kitchen glasses
         if let oil = catalog.first(where: { $0.id == "OIL_VEG" }),
            !bubbleDetected,
-           satExcessOverRim >= 0.08,
-           vision.meanSaturationWB >= 0.34,
-           vision.meanValueBrightness >= 0.28 {
-            let dHue = circularHueDiff(vision.meanHueDegrees, 53.0) / 11.5
-            let dSat = max(0.0, 0.44 - vision.meanSaturationWB) / 0.12
+           vision.meanHueDegrees >= 38.0 && vision.meanHueDegrees <= 66.0,
+           effectiveSatContrast >= 0.05,
+           vision.meanSaturationWB >= 0.24,
+           vision.meanValueBrightness >= 0.25 {
+            let dHue = circularHueDiff(vision.meanHueDegrees, 52.0) / 11.5
+            let dSat = max(0.0, 0.34 - vision.meanSaturationWB) / 0.12
             let dTurb = max(0.0, vision.opticalTurbidity - 0.34) / 0.14
             // Acoustic dispersion consistency bonus/check when Empty baseline is present
             let dDispersion: Double = {
@@ -412,22 +437,23 @@ public struct MultiModalFusionClassifier: Sendable {
             results.append((oil, dist))
         }
 
-        // 2. Milk / Dairy (MILK_DAIRY): High-albedo opaque white colloidal emulsion
+        // 2. Milk / Dairy (MILK_DAIRY): Opaque white colloidal emulsion (supports both top-down studio and real indoor side-view)
         if let milk = catalog.first(where: { $0.id == "MILK_DAIRY" }),
            !bubbleDetected,
            !visual.hasBarcode,
-           vision.meanValueBrightness >= 0.86,
-           vision.opticalTurbidity >= 0.80,
-           (vision.meanValueBrightness - vision.rimValueBrightness) >= 0.08 {
-            let dSat = vision.meanSaturationWB / 0.055
-            let dVal = max(0.0, 0.86 - vision.meanValueBrightness) / 0.08
-            let dTurb = max(0.0, 0.86 - vision.opticalTurbidity) / 0.12
+           vision.meanValueBrightness >= 0.62,
+           vision.opticalTurbidity >= 0.64,
+           vision.meanSaturationWB <= 0.14,
+           effectiveBrightExcess >= 0.06 {
+            let dSat = vision.meanSaturationWB / 0.09
+            let dVal = max(0.0, 0.78 - vision.meanValueBrightness) / 0.14
+            let dTurb = max(0.0, 0.80 - vision.opticalTurbidity) / 0.16
             let dist = sqrt(dSat * dSat + dVal * dVal + dTurb * dTurb)
             results.append((milk, dist))
         }
 
         // 3. Dark Absorptive Beverages: Red Wine vs. Carbonated Cola vs. Black Coffee
-        if vision.meanValueBrightness < 0.30 && (vision.rimValueBrightness - vision.meanValueBrightness) > 0.16 {
+        if vision.meanValueBrightness < 0.30 && effectiveDarkDeficit > 0.14 {
             let isRubyHalo = vision.meniscusHaloSaturation >= 0.24
                 && (vision.meniscusHaloHueDegrees >= 328.0 || vision.meniscusHaloHueDegrees <= 16.0)
 
@@ -449,16 +475,16 @@ public struct MultiModalFusionClassifier: Sendable {
 
         // 4. Citrus / Fruit Juice (CITRUS_JUICE): Chromatic orange / berry / turbid yellow pool
         if let juice = catalog.first(where: { $0.id == "CITRUS_JUICE" }),
-           satExcessOverRim >= 0.09,
-           vision.meanSaturationWB >= 0.38,
+           effectiveSatContrast >= 0.06,
+           vision.meanSaturationWB >= 0.30,
            vision.meanValueBrightness >= 0.30 {
             let isOrangeOrBerry = (vision.meanHueDegrees < 39.0 || vision.meanHueDegrees > 328.0)
             let isTurbidYellowJuice = (vision.meanHueDegrees >= 39.0 && vision.meanHueDegrees <= 58.0 && vision.opticalTurbidity >= 0.36)
             if isOrangeOrBerry || isTurbidYellowJuice {
                 let targetHue = vision.meanHueDegrees > 300.0 ? 348.0 : 26.0
                 let dHue = isTurbidYellowJuice ? 0.32 : (circularHueDiff(vision.meanHueDegrees, targetHue) / 18.0)
-                let dSat = max(0.0, 0.48 - vision.meanSaturationWB) / 0.15
-                let dTurb = max(0.0, 0.46 - vision.opticalTurbidity) / 0.20
+                let dSat = max(0.0, 0.44 - vision.meanSaturationWB) / 0.15
+                let dTurb = max(0.0, 0.44 - vision.opticalTurbidity) / 0.20
                 let dist = sqrt(dHue * dHue + dSat * dSat + dTurb * dTurb)
                 results.append((juice, dist))
             }
@@ -468,8 +494,8 @@ public struct MultiModalFusionClassifier: Sendable {
         if let tea = catalog.first(where: { $0.id == "TEA_AMBER" }),
            !bubbleDetected,
            !visual.hasBarcode,
-           satExcessOverRim >= 0.08,
-           vision.meanHueDegrees >= 18.0 && vision.meanHueDegrees < 39.0,
+           effectiveSatContrast >= 0.06,
+           vision.meanHueDegrees >= 18.0 && vision.meanHueDegrees < 38.0,
            vision.meanSaturationWB >= 0.24 && vision.meanSaturationWB < 0.44,
            vision.opticalTurbidity < 0.38,
            vision.meanValueBrightness >= 0.22 {
