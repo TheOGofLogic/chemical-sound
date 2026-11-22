@@ -1,0 +1,130 @@
+name: Build Signed Android v0.5.0 AAB (Liquid Analyzer)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "android/**"
+      - "Assets/**"
+      - ".github/workflows/android-playstore-build.yml"
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: "Integer versionCode for Google Play"
+        required: true
+        default: "6"
+
+permissions:
+  contents: write
+
+jobs:
+  build-signed-android-aab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Ensure Android SDK Licenses Accepted
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Prepare Upload Keystore
+        id: keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          EFFECTIVE_ALIAS="${KEY_ALIAS:-liquidanalyzer}"
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KS_PASS" ]; then
+            echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/upload-keystore.jks"
+            EFFECTIVE_KS_PASS="$KS_PASS"
+            EFFECTIVE_KEY_PASS="${KEY_PASS:-$KS_PASS}"
+            echo "used_existing_secret=true" >> "$GITHUB_OUTPUT"
+            echo "Using configured ANDROID_KEYSTORE_BASE64 repository secret."
+          else
+            EFFECTIVE_KS_PASS="${KS_PASS:-$(openssl rand -hex 12)}"
+            echo "::add-mask::$EFFECTIVE_KS_PASS"
+            EFFECTIVE_KEY_PASS="${KEY_PASS:-$EFFECTIVE_KS_PASS}"
+            echo "::add-mask::$EFFECTIVE_KEY_PASS"
+            keytool -genkeypair -v \
+              -keystore "$RUNNER_TEMP/upload-keystore.jks" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias "$EFFECTIVE_ALIAS" \
+              -storepass "$EFFECTIVE_KS_PASS" \
+              -keypass "$EFFECTIVE_KEY_PASS" \
+              -dname "CN=Gerald Clerge, O=Liquid Analyzer, C=US"
+            mkdir -p "$RUNNER_TEMP/keystore_backup"
+            cp "$RUNNER_TEMP/upload-keystore.jks" "$RUNNER_TEMP/keystore_backup/liquidanalyzer-upload.jks"
+            base64 -w 0 "$RUNNER_TEMP/upload-keystore.jks" > "$RUNNER_TEMP/keystore_backup/ANDROID_KEYSTORE_BASE64.txt"
+            printf "KEY_ALIAS=%s\nSTORE_AND_KEY_PASSWORD=%s\n" "$EFFECTIVE_ALIAS" "$EFFECTIVE_KS_PASS" > "$RUNNER_TEMP/keystore_backup/KEYSTORE_CREDENTIALS.txt"
+            echo "used_existing_secret=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload-keystore.jks" >> "$GITHUB_ENV"
+          echo "EFFECTIVE_KS_PASS=$EFFECTIVE_KS_PASS" >> "$GITHUB_ENV"
+          echo "EFFECTIVE_KEY_ALIAS=$EFFECTIVE_ALIAS" >> "$GITHUB_ENV"
+          echo "EFFECTIVE_KEY_PASS=$EFFECTIVE_KEY_PASS" >> "$GITHUB_ENV"
+
+      - name: Save Generated Keystore Backup (Only If Secrets Were Unset)
+        if: steps.keystore.outputs.used_existing_secret == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAVE-LIQUID-ANALYZER-KEYSTORE-BACKUP
+          path: ${{ runner.temp }}/keystore_backup/*
+          retention-days: 14
+
+      - name: Build Signed Release Android App Bundle (.aab)
+        working-directory: android
+        env:
+          ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code || '6' }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ env.EFFECTIVE_KS_PASS }}
+          ANDROID_KEY_ALIAS: ${{ env.EFFECTIVE_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ env.EFFECTIVE_KEY_PASS }}
+        run: |
+          gradle bundleRelease --no-daemon
+
+      - name: Verify Keystore Signature & Stage Signed v0.5.0 vc6 AAB
+        run: |
+          set -euo pipefail
+          VC="${{ github.event.inputs.version_code || '6' }}"
+          mkdir -p release/google-play
+          SRC_AAB=$(ls android/app/build/outputs/bundle/release/*.aab | head -n 1)
+          DEST_AAB="release/google-play/LiquidAnalyzer-v0.5.0-vc${VC}-signed.aab"
+          cp "$SRC_AAB" "$DEST_AAB"
+          jarsigner -verify -verbose -certs "$DEST_AAB" | head -n 35
+          sha256sum "$DEST_AAB" | tee "${DEST_AAB}.sha256.txt"
+
+      - name: Upload Signed .aab Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiquidAnalyzer-v0.5.0-vc6-Signed-AAB
+          path: |
+            release/google-play/LiquidAnalyzer-v0.5.0-vc*-signed.aab
+            release/google-play/LiquidAnalyzer-v0.5.0-vc*-signed.aab.sha256.txt
+
+      - name: Commit Signed v0.5.0 AAB to release/google-play
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f release/google-play/LiquidAnalyzer-v0.5.0-vc*-signed.aab release/google-play/LiquidAnalyzer-v0.5.0-vc*-signed.aab.sha256.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): publish signed LiquidAnalyzer-v0.5.0-vc6-signed.aab [skip ci]"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi

@@ -3,11 +3,13 @@ package org.liquidanalyzer.app
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -30,7 +32,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MusicNote
@@ -38,6 +42,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -60,7 +65,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import java.util.Locale
+import java.util.concurrent.Executors
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private val HeaderNavy = Color(0xFF0A172B)
@@ -70,31 +78,59 @@ private val ResultGreen1 = Color(0xFF16A34A)
 private val ResultGreen2 = Color(0xFF22C55E)
 private val CompOrange = Color(0xFFEA580C)
 private val CompWarmBg = Color(0xFFFFF8F1)
+private val FusionCoolBg = Color(0xFFF2F9FF)
 private val TunePurple = Color(0xFF843BF2)
 private val TuneMagenta = Color(0xFFE02E9E)
 
 enum class PrimaryTab { SCAN, HISTORY, LEARN, MORE }
-enum class ScanScreenState { HOME, AIM, SCANNING, RESULT, TUNE }
+enum class ScanScreenState { HOME, COMPARATOR, AIM, SCANNING, RESULT, TUNE }
 
 class MainActivity : ComponentActivity() {
+    private var tts: TextToSpeech? = null
+    private var ttsReady: Boolean = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val audioEngine = LiquidAnalyzerAudioEngine(this)
-        setContent {
-            MaterialTheme {
-                LiquidAnalyzerConsumerApp(audioEngine = audioEngine)
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.US
+                ttsReady = true
             }
         }
+        setContent {
+            MaterialTheme {
+                LiquidAnalyzerConsumerApp(
+                    audioEngine = audioEngine,
+                    onSpeakText = { text ->
+                        if (ttsReady) {
+                            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "la_result_tts")
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        tts?.stop()
+        tts?.shutdown()
+        super.onDestroy()
     }
 }
 
 @Composable
-fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
+fun LiquidAnalyzerConsumerApp(
+    audioEngine: LiquidAnalyzerAudioEngine,
+    onSpeakText: (String) -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var selectedTab by remember { mutableStateOf(PrimaryTab.SCAN) }
     var flowState by remember { mutableStateOf(ScanScreenState.HOME) }
+    var armedComparatorStage by remember { mutableStateOf<ComparatorStage?>(null) }
+    var comparatorRefreshTick by remember { mutableIntStateOf(0) }
     var scanProgress by remember { mutableFloatStateOf(0f) }
     var currentResult by remember { mutableStateOf<ScanResultItem?>(null) }
     var history by remember { mutableStateOf(listOf<ScanResultItem>()) }
@@ -110,35 +146,43 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
         )
     }
 
+    fun triggerScanWithStage(stage: ComparatorStage?) {
+        activeScanJob = scope.launch {
+            flowState = ScanScreenState.SCANNING
+            scanProgress = 0.08f
+            val outcome = audioEngine.executeConsumerScan(comparatorStage = stage) { scanProgress = it }
+            outcome.fold(
+                onSuccess = { item ->
+                    currentResult = item
+                    comparatorRefreshTick++
+                    armedComparatorStage = null
+                    if (item.status != MatchStatus.INVALID_MEASUREMENT) {
+                        history = listOf(item) + history.take(29)
+                    }
+                    flowState = ScanScreenState.RESULT
+                },
+                onFailure = { err ->
+                    flowState = ScanScreenState.AIM
+                    alertMessage = err.message ?: "Unable to complete scan. Please try again in a quiet area."
+                }
+            )
+        }
+    }
+
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
         hasCameraPerm = perms[Manifest.permission.CAMERA] == true
-        if (perms[Manifest.permission.RECORD_AUDIO] == true) {
-            activeScanJob = scope.launch {
-                flowState = ScanScreenState.SCANNING
-                scanProgress = 0.08f
-                val outcome = audioEngine.executeConsumerScan { scanProgress = it }
-                outcome.fold(
-                    onSuccess = { item ->
-                        currentResult = item
-                        if (item.status != MatchStatus.INVALID_MEASUREMENT) {
-                            history = listOf(item) + history.take(29)
-                        }
-                        flowState = ScanScreenState.RESULT
-                    },
-                    onFailure = { err ->
-                        flowState = ScanScreenState.AIM
-                        alertMessage = err.message ?: "Unable to complete scan. Please try again in a quiet area."
-                    }
-                )
-            }
-        } else {
+        if (perms[Manifest.permission.RECORD_AUDIO] == true && flowState == ScanScreenState.AIM) {
+            triggerScanWithStage(armedComparatorStage)
+        } else if (perms.containsKey(Manifest.permission.RECORD_AUDIO) && perms[Manifest.permission.RECORD_AUDIO] != true) {
             alertMessage = "Microphone access is required so Liquid Analyzer can measure sound-wave reflections."
         }
     }
 
-    // Camera permission is requested only when user taps "Start Liquid Scan" on Home screen
+    val emptyHz = remember(comparatorRefreshTick) { audioEngine.emptyCupPeakHz }
+    val waterHz = remember(comparatorRefreshTick) { audioEngine.waterBlankPeakHz }
+    val isComparatorReady = emptyHz != null && waterHz != null
 
     Scaffold(
         bottomBar = {
@@ -175,7 +219,28 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
                 PrimaryTab.SCAN -> {
                     when (flowState) {
                         ScanScreenState.HOME -> HomeDashboardScreen(
+                            isComparatorReady = isComparatorReady,
                             onStartScan = {
+                                armedComparatorStage = null
+                                if (!hasCameraPerm) {
+                                    permLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                                }
+                                flowState = ScanScreenState.AIM
+                            },
+                            onOpenComparator = {
+                                flowState = ScanScreenState.COMPARATOR
+                            }
+                        )
+                        ScanScreenState.COMPARATOR -> ComparatorWizardScreen(
+                            emptyCupHz = emptyHz,
+                            waterBlankHz = waterHz,
+                            onClose = { flowState = ScanScreenState.HOME },
+                            onReset = {
+                                audioEngine.clearComparatorBaselines()
+                                comparatorRefreshTick++
+                            },
+                            onSelectStage = { stage ->
+                                armedComparatorStage = stage
                                 if (!hasCameraPerm) {
                                     permLauncher.launch(arrayOf(Manifest.permission.CAMERA))
                                 }
@@ -184,7 +249,11 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
                         )
                         ScanScreenState.AIM -> AimScreen(
                             hasCameraPerm = hasCameraPerm,
-                            onBack = { flowState = ScanScreenState.HOME },
+                            armedStage = armedComparatorStage,
+                            onBack = {
+                                armedComparatorStage = null
+                                flowState = ScanScreenState.HOME
+                            },
                             onGear = { selectedTab = PrimaryTab.MORE },
                             onScan = {
                                 val hasMic = ContextCompat.checkSelfPermission(
@@ -193,24 +262,7 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
                                 if (!hasMic) {
                                     permLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA))
                                 } else {
-                                    activeScanJob = scope.launch {
-                                        flowState = ScanScreenState.SCANNING
-                                        scanProgress = 0.08f
-                                        val outcome = audioEngine.executeConsumerScan { scanProgress = it }
-                                        outcome.fold(
-                                            onSuccess = { item ->
-                                                currentResult = item
-                                                if (item.status != MatchStatus.INVALID_MEASUREMENT) {
-                                                    history = listOf(item) + history.take(29)
-                                                }
-                                                flowState = ScanScreenState.RESULT
-                                            },
-                                            onFailure = { err ->
-                                                flowState = ScanScreenState.AIM
-                                                alertMessage = err.message ?: "Unable to complete scan."
-                                            }
-                                        )
-                                    }
+                                    triggerScanWithStage(armedComparatorStage)
                                 }
                             }
                         )
@@ -224,13 +276,20 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
                         ScanScreenState.RESULT -> currentResult?.let { item ->
                             ResultScreen(
                                 item = item,
-                                onBack = { flowState = ScanScreenState.AIM },
+                                onBack = { flowState = ScanScreenState.HOME },
                                 onGear = { selectedTab = PrimaryTab.MORE },
+                                onSpeak = {
+                                    onSpeakText("${item.title}. ${item.badgeText}. Nominal pH: ${item.nominalPhRange}.")
+                                },
+                                onOpenComparator = { flowState = ScanScreenState.COMPARATOR },
                                 onPlayTune = {
                                     isTunePlaying = false
                                     flowState = ScanScreenState.TUNE
                                 },
-                                onScanAnother = { flowState = ScanScreenState.AIM }
+                                onScanAnother = {
+                                    armedComparatorStage = null
+                                    flowState = ScanScreenState.AIM
+                                }
                             )
                         }
                         ScanScreenState.TUNE -> currentResult?.let { item ->
@@ -299,7 +358,7 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
             },
             title = { Text("Open Research & Developer Mode?") },
             text = {
-                Text("Research Mode exposes controlled bench protocol status and raw diagnostic counters intended for laboratory validation studies.")
+                Text("Research Mode exposes controlled bench protocol status and raw diagnostic counters intended for validation studies.")
             }
         )
     }
@@ -310,12 +369,12 @@ fun LiquidAnalyzerConsumerApp(audioEngine: LiquidAnalyzerAudioEngine) {
             confirmButton = {
                 TextButton(onClick = { showResearchConsole = false }) { Text("Exit Research Mode") }
             },
-            title = { Text("Research & Bench Mode") },
+            title = { Text("Research & Bench Mode (v0.5.0)") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Protocol: CS-SPEC-P1-v1.2")
-                    Text("Excitation: 48 kHz ESS (400 Hz – 14 kHz)")
-                    Text("Cooldown Invariant: >= 2.0 s enforced")
+                    Text("Mode: MODE_AF Multi-Modal Acoustic + Optical Fusion")
+                    Text("Excitation: 48 kHz ESS (400 Hz – 14 kHz) + Pre-Roll HF Gate")
+                    Text("3-Step Comparator Ready: ${if (isComparatorReady) "YES" else "NO"}")
                     Text("Recorded Session Scans: ${history.size}")
                 }
             }
@@ -358,7 +417,11 @@ private fun TopHeaderBar(
 }
 
 @Composable
-private fun HomeDashboardScreen(onStartScan: () -> Unit) {
+private fun HomeDashboardScreen(
+    isComparatorReady: Boolean,
+    onStartScan: () -> Unit,
+    onOpenComparator: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -372,7 +435,7 @@ private fun HomeDashboardScreen(onStartScan: () -> Unit) {
             Text("See the liquid. Hear the science.", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF386B9E))
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                "Use sound waves and your phone to explore liquids and hear their mapped composition tune.",
+                "On-device optical + acoustic screening for colored, cloudy, and fizzy household liquids, plus guided cup comparison.",
                 fontSize = 14.sp,
                 color = Color(0xFF334155)
             )
@@ -400,10 +463,175 @@ private fun HomeDashboardScreen(onStartScan: () -> Unit) {
             Text("Start Liquid Scan", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
         }
 
-        LearnCardItem("Camera + Sound", "Uses camera framing and built-in acoustic transducers.", ScanBlue)
-        LearnCardItem("Identify Liquids", "Water, beverages, and calibrated reference profiles.", ResultGreen1)
-        LearnCardItem("See Composition", "Simple, clear experimental constituent cards.", CompOrange)
-        LearnCardItem("Hear the Signature", "Play the rainbow Chemical Tune.", TunePurple)
+        // Guided 3-Step Cup Comparator Card (v0.5.0 Parity)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, ResultGreen1.copy(alpha = 0.30f), RoundedCornerShape(18.dp))
+                .clickable { onOpenComparator() },
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(ResultGreen1.copy(alpha = 0.14f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Checklist, contentDescription = null, tint = ResultGreen1)
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("3-Step Cup Comparator", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = HeaderNavy)
+                        if (isComparatorReady) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "READY",
+                                color = ResultGreen1,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(ResultGreen1.copy(alpha = 0.14f))
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        "Stationary same-cup comparator (Empty → Water → Sample) for clear liquids.",
+                        fontSize = 12.sp,
+                        color = Color(0xFF475569)
+                    )
+                }
+                Text("›", fontSize = 22.sp, color = Color.Gray)
+            }
+        }
+
+        LearnCardItem("Multi-Modal Sensor Fusion", "Combines real-time camera color, turbidity & meniscus analysis with acoustic resonance.", ScanBlue)
+        LearnCardItem("Smart Empty-Cup Safety", "Verifies real liquid coupling to prevent false matches on dry glassware or flat surfaces.", ResultGreen1)
+        LearnCardItem("Composition & pH Reference", "Explore nominal formulas, pH ranges, and literature breakdowns offline.", CompOrange)
+        LearnCardItem("Chemical Tune & Spoken Readout", "Play polyphonic chemical chords and hear instant spoken result summaries.", TunePurple)
+    }
+}
+
+@Composable
+private fun ComparatorWizardScreen(
+    emptyCupHz: Double?,
+    waterBlankHz: Double?,
+    onClose: () -> Unit,
+    onReset: () -> Unit,
+    onSelectStage: (ComparatorStage) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF1F5FB))) {
+        TopHeaderBar(title = "3-Step Cup Comparator", onBack = onClose)
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text("Stationary Clear-Liquid Comparator", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = HeaderNavy)
+            Text(
+                "Keep your phone and cup at a fixed position to compare clear or fizzy household liquids against your Empty Cup and Water Blank.",
+                fontSize = 13.sp,
+                color = Color(0xFF475569)
+            )
+
+            ComparatorStepCard(
+                stepNum = "1",
+                title = "Step 1 • Scan Empty Cup",
+                statusLabel = if (emptyCupHz != null) "LOCKED (${emptyCupHz.roundToInt()} Hz)" else "REQUIRED",
+                isComplete = emptyCupHz != null,
+                description = "Place your dry empty glass in position to lock its unloaded shell resonance.",
+                buttonTitle = "Scan & Lock Empty Cup",
+                onAction = { onSelectStage(ComparatorStage.EMPTY_CUP) }
+            )
+
+            ComparatorStepCard(
+                stepNum = "2",
+                title = "Step 2 • Scan Water Blank",
+                statusLabel = if (waterBlankHz != null) "LOCKED (${waterBlankHz.roundToInt()} Hz)" else "NEXT",
+                isComplete = waterBlankHz != null,
+                description = "Pour clean water to a repeatable fill mark and lock the aqueous mass-loading baseline.",
+                buttonTitle = "Scan & Lock Water Blank",
+                onAction = { onSelectStage(ComparatorStage.WATER_BLANK) }
+            )
+
+            ComparatorStepCard(
+                stepNum = "3",
+                title = "Step 3 • Scan Test Liquid",
+                statusLabel = if (emptyCupHz != null && waterBlankHz != null) "READY" else "LOCK STEPS 1–2 FIRST",
+                isComplete = false,
+                description = "Empty, dry, and pour your test liquid to the same fill mark to evaluate ΔF/F_water, meniscus, and bubble scatter.",
+                buttonTitle = "Scan & Identify Test Liquid",
+                onAction = { onSelectStage(ComparatorStage.TEST_SAMPLE) }
+            )
+
+            if (emptyCupHz != null || waterBlankHz != null) {
+                TextButton(onClick = onReset, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                    Text("Reset Saved Cup Baselines", color = Color.Red)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ComparatorStepCard(
+    stepNum: String,
+    title: String,
+    statusLabel: String,
+    isComplete: Boolean,
+    description: String,
+    buttonTitle: String,
+    onAction: () -> Unit
+) {
+    val accent = if (isComplete) ResultGreen1 else ScanBlue
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        modifier = Modifier.fillMaxWidth().border(1.dp, accent.copy(alpha = 0.30f), RoundedCornerShape(18.dp))
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier.size(28.dp).background(accent, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(if (isComplete) "✓" else stepNum, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(title, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = HeaderNavy)
+                }
+                Text(
+                    statusLabel,
+                    color = accent,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = 0.12f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+            Text(description, fontSize = 12.sp, color = Color(0xFF475569))
+            Button(
+                onClick = onAction,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = accent),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(buttonTitle, color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
@@ -429,14 +657,22 @@ private fun StepPill(modifier: Modifier, num: String, label: String, color: Colo
 @Composable
 private fun AimScreen(
     hasCameraPerm: Boolean,
+    armedStage: ComparatorStage?,
     onBack: () -> Unit,
     onGear: () -> Unit,
     onScan: () -> Unit
 ) {
+    val scanLabel = when (armedStage) {
+        ComparatorStage.EMPTY_CUP -> "SCAN EMPTY CUP"
+        ComparatorStage.WATER_BLANK -> "SCAN WATER BLANK"
+        ComparatorStage.TEST_SAMPLE -> "SCAN TEST LIQUID"
+        null -> "SCAN 1×"
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         TopHeaderBar(title = "Liquid Analyzer", onBack = onBack, onGear = onGear)
 
-        Box(modifier = Modifier.fillMaxSize().background(Color(0xFFCFD8E3))) {
+        Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0E1B31))) {
             if (hasCameraPerm) {
                 CameraPreviewBox(modifier = Modifier.fillMaxSize())
             }
@@ -446,9 +682,20 @@ private fun AimScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.65f))
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        if (armedStage != null) "3-Step Comparator Active" else "MODE_AF • Optical + Acoustic Fusion",
+                        color = ScanCyan,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    )
+                }
 
-                // Blue 4-Corner Targeting Reticle
                 Canvas(modifier = Modifier.size(220.dp, 240.dp)) {
                     val arm = 36.dp.toPx()
                     val stroke = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
@@ -464,15 +711,6 @@ private fun AimScreen(
                     drawLine(ScanCyan, Offset(w, h - arm), Offset(w, h), strokeWidth = stroke.width, cap = StrokeCap.Round)
                 }
 
-                Box(
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.65f))
-                        .padding(horizontal = 24.dp, vertical = 10.dp)
-                ) {
-                    Text("Aim at the liquid", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                }
-
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Button(
                         onClick = onScan,
@@ -484,11 +722,11 @@ private fun AimScreen(
                             .height(54.dp)
                             .background(Brush.horizontalGradient(listOf(ScanBlue, ScanCyan)), CircleShape)
                     ) {
-                        Text("SCAN", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp)
+                        Text(scanLabel, color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "Camera guides aiming • Sound waves measure the liquid",
+                        "On-device optical chromaticity + 48 kHz acoustic resonance",
                         color = Color.White,
                         fontSize = 11.sp
                     )
@@ -501,6 +739,12 @@ private fun AimScreen(
 @Composable
 private fun CameraPreviewBox(modifier: Modifier = Modifier) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    DisposableEffect(Unit) {
+        onDispose { analysisExecutor.shutdown() }
+    }
+
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -512,8 +756,21 @@ private fun CameraPreviewBox(modifier: Modifier = Modifier) {
                     val preview = Preview.Builder().build().also {
                         it.setSurfaceProvider(previewView.surfaceProvider)
                     }
+                    val imageAnalysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                        .also { analysis ->
+                            analysis.setAnalyzer(analysisExecutor) { proxy ->
+                                LiveCameraOpticsAnalyzer.analyzeFrame(proxy)
+                            }
+                        }
                     provider.unbindAll()
-                    provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview)
+                    provider.bindToLifecycle(
+                        lifecycleOwner,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        imageAnalysis
+                    )
                 }
             }, ContextCompat.getMainExecutor(ctx))
             previewView
@@ -567,7 +824,7 @@ private fun ScanningScreen(progress: Float, onCancel: () -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
         Text("Analyzing Liquid...", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(6.dp))
-        Text("Listening to sound-wave reflections", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+        Text("Fusing optical colorimetry & acoustic resonance", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
 
         Spacer(modifier = Modifier.height(28.dp))
         LinearProgressIndicator(
@@ -596,10 +853,18 @@ private fun ResultScreen(
     item: ScanResultItem,
     onBack: () -> Unit,
     onGear: () -> Unit,
+    onSpeak: () -> Unit,
+    onOpenComparator: () -> Unit,
     onPlayTune: () -> Unit,
     onScanAnother: () -> Unit
 ) {
     val isMatch = item.status == MatchStatus.REFERENCE_MATCH
+    val bannerTitle = when (item.status) {
+        MatchStatus.REFERENCE_MATCH -> "Reference Match"
+        MatchStatus.EMPTY_CONTAINER -> "Empty Container Safety Gate"
+        MatchStatus.NON_LIQUID_SURFACE -> "Surface Safety Gate"
+        else -> "Multi-Modal Profile"
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF1F5FB))) {
         TopHeaderBar(title = "Liquid Analyzer", onBack = onBack, onGear = onGear)
@@ -622,28 +887,38 @@ private fun ResultScreen(
                             .background(
                                 Brush.horizontalGradient(
                                     if (isMatch) listOf(ResultGreen1, ResultGreen2)
-                                    else listOf(ScanBlue, TunePurple)
+                                    else listOf(CompOrange, TunePurple)
                                 )
                             )
                             .padding(horizontal = 20.dp, vertical = 14.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            if (isMatch) "Result" else "Acoustic Profile",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 19.sp
+                        Text(bannerTitle, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Icon(
+                            if (isMatch) Icons.Default.CheckCircle else Icons.Default.Info,
+                            contentDescription = null,
+                            tint = Color.White
                         )
-                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.White)
                     }
 
                     Column(
                         modifier = Modifier.padding(18.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text(item.title, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
-                        Text(item.formulaDisplay, fontSize = 17.sp, color = Color.Gray, fontWeight = FontWeight.SemiBold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(item.title, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold, color = HeaderNavy)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(
+                                onClick = onSpeak,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(ScanBlue.copy(alpha = 0.12f), CircleShape)
+                            ) {
+                                Icon(Icons.Default.VolumeUp, contentDescription = "Speak Result", tint = ScanBlue, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                        Text(item.formulaDisplay, fontSize = 16.sp, color = Color.DarkGray, fontWeight = FontWeight.SemiBold)
 
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -671,8 +946,8 @@ private fun ResultScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Composition", color = CompOrange, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    Text("Experimental", color = CompOrange, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text("Reference Composition & pH", color = CompOrange, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text("Literature Profile", color = CompOrange, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                 }
                                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                                 item.constituents.forEach { c ->
@@ -680,11 +955,46 @@ private fun ResultScreen(
                                         modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Text(c.symbol, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                        Text(c.symbol, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = CompOrange)
                                         Column(horizontalAlignment = Alignment.End) {
-                                            Text(c.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                            Text(c.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = HeaderNavy)
                                             Text(c.roleDescription, fontSize = 11.sp, color = Color.Gray)
                                         }
+                                    }
+                                }
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                                Text("Nominal pH: ${item.nominalPhRange}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = HeaderNavy)
+                            }
+                        }
+
+                        item.attribution?.let { attr ->
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(FusionCoolBg)
+                                    .border(1.dp, ScanBlue.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Multi-Modal Sensor Fusion", color = ScanBlue, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text("v0.5.0", color = ResultGreen1, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
+                                Text("• Acoustic: ${attr.acousticEvidence}", fontSize = 12.sp, color = Color(0xFF334155))
+                                Text("• Optical: ${attr.visionEvidence}", fontSize = 12.sp, color = Color(0xFF334155))
+                                if (!attr.comparatorEvidence.isNullOrBlank()) {
+                                    Text("• Comparator: ${attr.comparatorEvidence}", fontSize = 12.sp, color = ResultGreen1, fontWeight = FontWeight.SemiBold)
+                                }
+                                if (attr.recommendsComparator) {
+                                    Button(
+                                        onClick = onOpenComparator,
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = ScanBlue),
+                                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                                    ) {
+                                        Text("Open 3-Step Cup Comparator", color = Color.White, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -698,7 +1008,7 @@ private fun ResultScreen(
                             textAlign = TextAlign.Center
                         )
 
-                        if (item.status != MatchStatus.INVALID_MEASUREMENT) {
+                        if (item.status == MatchStatus.REFERENCE_MATCH || item.status == MatchStatus.NO_VALIDATED_MATCH) {
                             Spacer(modifier = Modifier.height(16.dp))
                             Button(
                                 onClick = onPlayTune,
@@ -774,8 +1084,8 @@ private fun ChemicalTuneScreen(
         }
 
         Spacer(modifier = Modifier.height(24.dp))
-        Text(item.formulaDisplay, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.ExtraBold)
-        Text("Chemical Tune", color = Color(0xFFC084FC), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(item.formulaDisplay, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center)
+        Text("${item.title} • Chemical Tune", color = Color(0xFFC084FC), fontSize = 17.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             item.tuneSummary,
@@ -870,10 +1180,10 @@ private fun LearnScreen() {
         Text("Learn", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
         Text("See the liquid. Hear the science.", color = Color.DarkGray, fontWeight = FontWeight.SemiBold)
 
-        LearnCardItem("1. Camera + Sound", "Your camera frames the container. Sound waves emitted by your speaker and recorded by your microphone provide the acoustic measurement.", ScanBlue)
-        LearnCardItem("2. Experimental Reference Matching", "Resonance features from the echo are compared with characterized reference profiles.", ResultGreen1)
-        LearnCardItem("3. Reference Composition", "Displays known constituents for matched reference profiles. Experimental research & educational tool—never a safety or purity test.", CompOrange)
-        LearnCardItem("4. Chemical Tune", "Maps reference constituents and measured resonance frequencies into musical intervals and timbres.", TunePurple)
+        LearnCardItem("1. Multi-Modal Camera + Sound", "Camera colorimetry, turbidity, and meniscus geometry fuse with 48 kHz container resonance and fizz scatter.", ScanBlue)
+        LearnCardItem("2. 3-Step Cup Comparator", "For clear household liquids, lock Empty Cup → Water Blank → Sample in a stationary glass.", ResultGreen1)
+        LearnCardItem("3. Reference Composition & pH", "Explore literature-based formulas and nominal pH profiles. Educational household tool—never a clinical or safety test.", CompOrange)
+        LearnCardItem("4. Chemical Tune & Voice Readout", "Audition mapped polyphonic chords and hear instant spoken summaries 100% offline.", TunePurple)
     }
 }
 
@@ -902,10 +1212,10 @@ private fun MoreScreen(onOpenResearchGate: () -> Unit) {
 
         Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("For Research & Education", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("100% Private & Educational", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    "Liquid Analyzer is an experimental acoustic liquid-analysis platform. Results must not be used to determine drinkability, purity, toxicity, or safety.",
+                    "All optical and acoustic signal processing runs locally on your Android device with zero cloud uploads. Reference profiles are for educational household exploration—never clinical diagnostics, drinkability, or safety verification.",
                     fontSize = 13.sp,
                     color = Color.DarkGray
                 )
