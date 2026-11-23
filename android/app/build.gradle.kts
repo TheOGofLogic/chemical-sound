@@ -18,13 +18,13 @@ tasks.named("preBuild") {
 
 android {
     namespace = "org.liquidanalyzer.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.liquidanalyzer.app"
         minSdk = 26
-        targetSdk = 35
-        versionCode = (System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull()) ?: 6
+        targetSdk = 36
+        versionCode = (System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull()) ?: 7
         versionName = "0.5.0"
     }
 

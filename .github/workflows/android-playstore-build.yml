@@ -13,7 +13,7 @@ on:
       version_code:
         description: "Integer versionCode for Google Play"
         required: true
-        default: "6"
+        default: "7"
 
 permissions:
   contents: write
@@ -33,9 +33,10 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Ensure Android SDK Licenses Accepted
+      - name: Ensure Android SDK API 36 & Licenses Installed
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"
 
       - name: Setup Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
@@ -92,17 +93,17 @@ jobs:
       - name: Build Signed Release Android App Bundle (.aab)
         working-directory: android
         env:
-          ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code || '6' }}
+          ANDROID_VERSION_CODE: ${{ github.event.inputs.version_code || '7' }}
           ANDROID_KEYSTORE_PASSWORD: ${{ env.EFFECTIVE_KS_PASS }}
           ANDROID_KEY_ALIAS: ${{ env.EFFECTIVE_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ env.EFFECTIVE_KEY_PASS }}
         run: |
           gradle bundleRelease --no-daemon
 
-      - name: Verify Keystore Signature & Stage Signed v0.5.0 vc6 AAB
+      - name: Verify Keystore Signature & Stage Signed v0.5.0 vc7 AAB
         run: |
           set -euo pipefail
-          VC="${{ github.event.inputs.version_code || '6' }}"
+          VC="${{ github.event.inputs.version_code || '7' }}"
           mkdir -p release/google-play
           SRC_AAB=$(ls android/app/build/outputs/bundle/release/*.aab | head -n 1)
           DEST_AAB="release/google-play/LiquidAnalyzer-v0.5.0-vc${VC}-signed.aab"
@@ -113,7 +114,7 @@ jobs:
       - name: Upload Signed .aab Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LiquidAnalyzer-v0.5.0-vc6-Signed-AAB
+          name: LiquidAnalyzer-v0.5.0-vc7-Signed-AAB
           path: |
             release/google-play/LiquidAnalyzer-v0.5.0-vc*-signed.aab
             release/google-play/LiquidAnalyzer-v0.5.0-vc*-signed.aab.sha256.txt
@@ -124,7 +125,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f release/google-play/LiquidAnalyzer-v0.5.0-vc*-signed.aab release/google-play/LiquidAnalyzer-v0.5.0-vc*-signed.aab.sha256.txt
           if ! git diff --cached --quiet; then
-            git commit -m "chore(release): publish signed LiquidAnalyzer-v0.5.0-vc6-signed.aab [skip ci]"
+            git commit -m "chore(release): publish signed LiquidAnalyzer-v0.5.0-vc7-signed.aab (API 36) [skip ci]"
             git pull --rebase origin main
             git push origin HEAD:main
           fi
