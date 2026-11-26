@@ -24,7 +24,7 @@ android {
         applicationId = "org.liquidanalyzer.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = (System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull()) ?: 7
+        versionCode = (System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull()) ?: 8
         versionName = "0.5.0"
     }
 
@@ -92,4 +92,14 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
+
+    // Upgrade transitive AppCompat & Fragment pulled by CameraX camera-view (replaces outdated 1.1.0)
+    constraints {
+        implementation("androidx.appcompat:appcompat:1.7.1") {
+            because("Replaces outdated transitive appcompat:1.1.0 pulled by camera-view")
+        }
+        implementation("androidx.fragment:fragment:1.8.9") {
+            because("Clears Google Play Console outdated androidx.fragment:fragment:1.1.0 SDK advisory")
+        }
+    }
 }
